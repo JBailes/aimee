@@ -334,6 +334,18 @@ static void test_is_write_command_edge_cases(void)
    assert(is_write_command("diff a.txt b.txt") == 0);
    assert(is_write_command("find . -name '*.c'") == 0);
 
+   /* fd-to-fd redirections — NOT file writes */
+   assert(is_write_command("make 2>&1") == 0);
+   assert(is_write_command("gcc -o test test.c 2>&1") == 0);
+   assert(is_write_command("./run.sh 2>&1 | head") == 0);
+   assert(is_write_command("cmd >&2") == 0);
+   assert(is_write_command("cmd 1>&2") == 0);
+
+   /* File redirections — ARE writes */
+   assert(is_write_command("echo hello > file.txt") == 1);
+   assert(is_write_command("echo hello 2>err.log") == 1);
+   assert(is_write_command("echo hello 1>out.log") == 1);
+
    /* Empty/null command */
    assert(is_write_command("") == 0);
    assert(is_write_command(NULL) == 0);

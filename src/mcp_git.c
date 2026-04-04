@@ -950,12 +950,16 @@ cJSON *handle_git_diff_summary(cJSON *args)
       return r;
    }
 
-   /* Compress full diff to change summary */
+   /* Compress full diff to change descriptions per file.
+    * Include hunk headers and changed lines (truncated per file) so the
+    * caller can understand *what* changed, not just how many lines. */
    char summary[SUMMARY_MAX];
    int spos = 0;
    char current_file[512] = "";
    int file_adds = 0, file_dels = 0;
    int file_count = 0;
+   int file_lines = 0;                       /* changed lines emitted for current file */
+   static const int MAX_LINES_PER_FILE = 40; /* cap per file to keep summary compact */
 
    char *line = out;
    while (line && *line && spos < SUMMARY_MAX - 200)
@@ -966,12 +970,13 @@ cJSON *handle_git_diff_summary(cJSON *args)
 
       if (strncmp(line, "diff --git ", 11) == 0)
       {
-         /* Flush previous file */
-         if (current_file[0] && file_count < 20)
+         /* Flush previous file header */
+         if (current_file[0] && file_count <= 20)
          {
-            spos +=
-                snprintf(summary + spos, sizeof(summary) - (size_t)spos,
-                         "%s (%d insertions, %d deletions)\n", current_file, file_adds, file_dels);
+            if (file_lines >= MAX_LINES_PER_FILE)
+               spos += snprintf(summary + spos, sizeof(summary) - (size_t)spos,
+                                "  ... (%d more changed lines)\n",
+                                (file_adds + file_dels) - file_lines);
          }
          /* Parse new file: "diff --git a/foo b/foo" -> "foo" */
          const char *b = strstr(line, " b/");
@@ -981,25 +986,43 @@ cJSON *handle_git_diff_summary(cJSON *args)
             snprintf(current_file, sizeof(current_file), "%s", line + 11);
          file_adds = 0;
          file_dels = 0;
+         file_lines = 0;
          file_count++;
+         if (file_count <= 20)
+            spos += snprintf(summary + spos, sizeof(summary) - (size_t)spos, "%s\n", current_file);
       }
-      else if (line[0] == '+' && line[1] != '+')
+      else if (strncmp(line, "@@ ", 3) == 0 && file_count <= 20)
       {
-         file_adds++;
+         /* Hunk header — include it for context */
+         spos += snprintf(summary + spos, sizeof(summary) - (size_t)spos, "  %s\n", line);
+         file_lines = 0; /* reset per-hunk counter so each hunk gets some lines */
       }
-      else if (line[0] == '-' && line[1] != '-')
+      else if ((line[0] == '+' && line[1] != '+') || (line[0] == '-' && line[1] != '-'))
       {
-         file_dels++;
+         if (line[0] == '+')
+            file_adds++;
+         else
+            file_dels++;
+         if (file_count <= 20 && file_lines < MAX_LINES_PER_FILE)
+         {
+            /* Truncate very long lines */
+            if (strlen(line) > 120)
+               spos +=
+                   snprintf(summary + spos, sizeof(summary) - (size_t)spos, "  %.120s...\n", line);
+            else
+               spos += snprintf(summary + spos, sizeof(summary) - (size_t)spos, "  %s\n", line);
+            file_lines++;
+         }
       }
 
       line = nl ? nl + 1 : NULL;
    }
 
-   /* Flush last file */
-   if (current_file[0] && file_count <= 20)
+   /* Flush last file overflow */
+   if (current_file[0] && file_count <= 20 && file_lines >= MAX_LINES_PER_FILE)
    {
       spos += snprintf(summary + spos, sizeof(summary) - (size_t)spos,
-                       "%s (%d insertions, %d deletions)\n", current_file, file_adds, file_dels);
+                       "  ... (%d more changed lines)\n", (file_adds + file_dels) - file_lines);
    }
 
    if (file_count > 20)

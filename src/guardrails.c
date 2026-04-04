@@ -341,13 +341,34 @@ int is_write_command(const char *command)
          return 1;
    }
 
-   /* Check for redirection operators (with and without surrounding spaces) */
-   if (strstr(command, " > ") || strstr(command, " >> "))
+   /* Check for redirection operators (with and without surrounding spaces).
+    * Must exclude fd-to-fd redirections like 2>&1 which are not file writes. */
+   {
+      const char *p = command;
+      while ((p = strstr(p, " > ")) != NULL)
+      {
+         /* Skip if this is part of ">&" (fd-to-fd) */
+         if (p[3] == '&')
+         {
+            p += 3;
+            continue;
+         }
+         return 1;
+      }
+   }
+   if (strstr(command, " >> "))
       return 1;
-   /* Detect redirections without leading space: e.g. "echo hi>file" */
+   /* Detect redirections without leading space: e.g. "echo hi>file"
+    * Skip fd-to-fd redirections: N>&M (e.g. 2>&1) */
    for (const char *c = command; *c; c++)
    {
-      if ((*c == '>' || (*c == '1' && c[1] == '>') || (*c == '2' && c[1] == '>')) && c != command)
+      if (c == command)
+         continue;
+      if (*c == '>' && c[1] == '&')
+         continue; /* fd-to-fd: >&N */
+      if ((*c == '1' || *c == '2') && c[1] == '>' && c[2] == '&')
+         continue; /* fd-to-fd: N>&M */
+      if (*c == '>' || ((*c == '1' || *c == '2') && c[1] == '>'))
          return 1;
    }
 
@@ -966,11 +987,35 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
                  cmd->valuestring);
       }
 
+      /* If the CWD is inside a .claude/worktrees/ subdirectory, the agent is
+       * operating from a Claude Code worktree.  Reads via absolute paths back
+       * into the original workspace are expected and should not be blocked. */
+      int cwd_in_cc_worktree = 0;
+      for (int ci = 0; ci < wcfg.workspace_count; ci++)
+      {
+         size_t wlen = strlen(wcfg.workspaces[ci]);
+         if (wlen == 0)
+            continue;
+         if (strncmp(cwd, wcfg.workspaces[ci], wlen) == 0 &&
+             (cwd[wlen] == '/' || cwd[wlen] == '\0'))
+         {
+            const char *rem = cwd + wlen;
+            if (rem[0] == '/')
+               rem++;
+            if (strncmp(rem, ".claude/worktrees/", 18) == 0)
+            {
+               cwd_in_cc_worktree = 1;
+               break;
+            }
+         }
+      }
+
       /* Block reads (Read/Glob/Grep) to real workspace paths — but only if the
        * worktree has already been created. Before the first write, reads can go
        * to the original repo safely (non-mutating). This avoids eagerly creating
-       * worktrees just because a file was read. */
-      if (strcmp(tool_name, "Read") == 0 && fp && cJSON_IsString(fp))
+       * worktrees just because a file was read.
+       * Skip enforcement entirely when the CWD is a Claude Code worktree. */
+      if (!cwd_in_cc_worktree && strcmp(tool_name, "Read") == 0 && fp && cJSON_IsString(fp))
       {
          normalize_path(fp->valuestring, cwd, norm, sizeof(norm));
          const char *wt = worktree_for_path_if_created(state, &wcfg, norm);
@@ -982,7 +1027,7 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
             return 2;
          }
       }
-      if (strcmp(tool_name, "Glob") == 0 || strcmp(tool_name, "Grep") == 0)
+      if (!cwd_in_cc_worktree && (strcmp(tool_name, "Glob") == 0 || strcmp(tool_name, "Grep") == 0))
       {
          cJSON *p = cJSON_GetObjectItem(root, "path");
          const char *check = NULL;
