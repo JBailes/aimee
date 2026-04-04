@@ -363,8 +363,7 @@ static int try_server(const char *socket_path, int timeout_ms)
          if (strcmp(server_bid, AIMEE_BUILD_ID) != 0)
          {
             pid_t server_pid = get_peer_pid(conn.fd);
-            fprintf(stderr,
-                    "aimee: server build mismatch (server=%s, client=%s) — restarting\n",
+            fprintf(stderr, "aimee: server build mismatch (server=%s, client=%s) — restarting\n",
                     server_bid[0] ? server_bid : "(unknown)", AIMEE_BUILD_ID);
             if (server_pid > 1)
             {
