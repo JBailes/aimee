@@ -316,6 +316,23 @@ static void test_git_pr_unknown_action(void)
 
 static void test_git_pr_create_missing_title(void)
 {
+   /* Run in an isolated temp repo so merged-PR and verify gates don't
+    * interfere with the missing-title error we're testing for. */
+   char tmpdir[] = "/tmp/aimee-test-pr-XXXXXX";
+   assert(mkdtemp(tmpdir) != NULL);
+
+   char cmd[512];
+   snprintf(cmd, sizeof(cmd),
+            "cd '%s' && git init -q && git config user.email test@test && "
+            "git config user.name test && echo x > f.txt && "
+            "git add f.txt && git commit -q -m 'init'",
+            tmpdir);
+   assert(system(cmd) == 0);
+
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+
    cJSON *args = cJSON_CreateObject();
    cJSON_AddStringToObject(args, "action", "create");
    cJSON *resp = handle_git_pr(args);
@@ -325,6 +342,10 @@ static void test_git_pr_create_missing_title(void)
    assert(strstr(text, "title") != NULL);
    cJSON_Delete(resp);
    cJSON_Delete(args);
+
+   assert(chdir(saved_cwd) == 0);
+   snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
+   system(cmd);
 }
 
 /* --- Test handle_git_diff_summary in repo --- */
