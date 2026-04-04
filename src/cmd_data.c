@@ -442,7 +442,7 @@ static const config_field_t config_fields[] = {
      0},
     {"embedding_command", offsetof(config_t, embedding_command),
      sizeof(((config_t *)0)->embedding_command), 0},
-    {"block_raw_git", offsetof(config_t, block_raw_git), sizeof(int), 1},
+    {"block_raw_git", offsetof(config_t, block_raw_git), sizeof(int), 0},
     {"cross_verify", offsetof(config_t, cross_verify), sizeof(int), 1},
     {NULL, 0, 0, 0},
 };
