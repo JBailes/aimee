@@ -183,6 +183,7 @@ static const config_schema_entry_t config_schema[] = {{"db_path", SCHEMA_STRING,
                                                       {"workspaces", SCHEMA_ARRAY, 0},
                                                       {"autonomous", SCHEMA_BOOL, 0},
                                                       {"cross_verify", SCHEMA_OBJECT, 0},
+                                                      {"retry", SCHEMA_OBJECT, 0},
                                                       {NULL, 0, 0}};
 
 static const char *schema_type_name(schema_type_t t)
@@ -466,6 +467,23 @@ int config_load(config_t *cfg)
          snprintf(cfg->verify_prompt, sizeof(cfg->verify_prompt), "%s", item->valuestring);
    }
 
+   /* API retry settings */
+   cJSON *retry = cJSON_GetObjectItemCaseSensitive(root, "retry");
+   if (cJSON_IsObject(retry))
+   {
+      item = cJSON_GetObjectItemCaseSensitive(retry, "max_attempts");
+      if (cJSON_IsNumber(item))
+         cfg->retry_max_attempts = (int)item->valuedouble;
+
+      item = cJSON_GetObjectItemCaseSensitive(retry, "base_ms");
+      if (cJSON_IsNumber(item))
+         cfg->retry_base_ms = (int)item->valuedouble;
+
+      item = cJSON_GetObjectItemCaseSensitive(retry, "max_ms");
+      if (cJSON_IsNumber(item))
+         cfg->retry_max_ms = (int)item->valuedouble;
+   }
+
    cJSON_Delete(root);
 
    /* Update mtime cache */
@@ -544,6 +562,18 @@ int config_save(const config_t *cfg)
          cJSON_AddStringToObject(cv, "role", cfg->verify_role);
       if (cfg->verify_prompt[0])
          cJSON_AddStringToObject(cv, "prompt", cfg->verify_prompt);
+   }
+
+   /* API retry settings (only save if non-default) */
+   if (cfg->retry_max_attempts || cfg->retry_base_ms || cfg->retry_max_ms)
+   {
+      cJSON *retry = cJSON_AddObjectToObject(root, "retry");
+      if (cfg->retry_max_attempts)
+         cJSON_AddNumberToObject(retry, "max_attempts", cfg->retry_max_attempts);
+      if (cfg->retry_base_ms)
+         cJSON_AddNumberToObject(retry, "base_ms", cfg->retry_base_ms);
+      if (cfg->retry_max_ms)
+         cJSON_AddNumberToObject(retry, "max_ms", cfg->retry_max_ms);
    }
 
    char *json_str = cJSON_Print(root);

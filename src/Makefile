@@ -66,7 +66,7 @@ DATA_OBJS = $(DATA_SRCS:%.c=$(OBJDIR)/%.o)
 # --- Layer 2: Agent execution (agent loop, tools, HTTP, policy) ---
 AGENT_SRCS = agent.c agent_protocol.c agent_policy.c agent_context.c \
              agent_plan.c agent_eval.c agent_coord.c agent_jobs.c \
-             agent_tools.c agent_http.c agent_tunnel.c
+             agent_tools.c agent_http.c http_retry.c agent_tunnel.c
 AGENT_OBJS = $(AGENT_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Layer 3: Commands + UI (cmd_*, webchat, dashboard) ---
