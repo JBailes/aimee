@@ -14,6 +14,19 @@
 #define GIT_BUF_SIZE 65536
 #define SUMMARY_MAX  4096
 
+/* Track whether the current MCP git operation is running in a worktree. */
+static int s_in_worktree = 0;
+
+void mcp_git_set_worktree(int val)
+{
+   s_in_worktree = val;
+}
+
+int mcp_git_get_worktree(void)
+{
+   return s_in_worktree;
+}
+
 /* --- Helpers --- */
 
 static cJSON *mcp_text(const char *text)
