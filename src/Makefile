@@ -58,7 +58,7 @@ CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/cJSON.o
 DATA_SRCS = memory.c memory_promote.c memory_context.c memory_scan.c \
             memory_graph.c memory_advanced.c trace_analysis.c \
             index.c extractors.c extractors_extra.c \
-            rules.c tasks.c feedback.c guardrails.c \
+            rules.c tasks.c feedback.c guardrails.c worktree.c \
             workspace.c working_memory.c agent_config.c cmd_describe.c \
             secret_store.c
 DATA_OBJS = $(DATA_SRCS:%.c=$(OBJDIR)/%.o)
@@ -110,7 +110,7 @@ integration-tests: $(BINARY) $(SERVER)
 # --- Benchmark suite ---
 BENCH_BASELINE = ../benchmarks/baseline.json
 
-BENCH_OBJS = $(OBJDIR)/tests/bench_perf.o $(OBJDIR)/guardrails.o \
+BENCH_OBJS = $(OBJDIR)/tests/bench_perf.o $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o \
              $(OBJDIR)/workspace.o $(OBJDIR)/working_memory.o \
              $(OBJDIR)/agent_config.o $(OBJDIR)/cmd_describe.o \
              $(AGENT_OBJS)
