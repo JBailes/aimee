@@ -28,9 +28,9 @@ int verify_load_config(const char *project_root, verify_config_t *cfg);
  * to .aimee/.last-verify. */
 int verify_run_all(const char *project_root, verify_config_t *cfg);
 
-/* Check if current HEAD has been verified. Returns 1 if verified, 0 if not.
+/* Check whether current HEAD matches the last recorded successful verification.
  * Writes explanatory message to msg_buf. If no verify section in project.yaml,
- * returns 1 (no gate). */
+ * returns 1. */
 int verify_check_head(const char *project_root, char *msg_buf, size_t msg_len);
 
 /* MCP tool handler: git_verify. */
