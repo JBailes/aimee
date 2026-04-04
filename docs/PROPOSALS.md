@@ -92,7 +92,6 @@ This index reflects the current consolidated pending proposal set in [`docs/prop
 
 | Proposal | Summary |
 |----------|---------|
-| [API Retry Backoff](proposals/pending/api-retry-backoff.md) | Add overflow-safe retries for transient provider/API failures |
 | [Enterprise Proxy Support](proposals/pending/enterprise-proxy-support.md) | Support proxies and custom CA bundles in enterprise environments |
 | [Graceful Cancellation](proposals/pending/graceful-cancellation.md) | Add one cancellation surface for long-running jobs, loops, and pipelines |
 | [MCP Session-Aware Git](proposals/pending/mcp-session-aware-git.md) | Make MCP git operations aware of session/worktree context |
@@ -135,6 +134,7 @@ This index reflects the current consolidated pending proposal set in [`docs/prop
 | Proposal | Summary |
 |----------|---------|
 | [Consecutive Message Compaction](proposals/done/consecutive-message-compaction.md) | Merge same-role adjacent messages before API calls |
+| [API Retry Backoff](proposals/complete/api-retry-backoff.md) | Add overflow-safe retries for transient provider/API failures |
 
 ## Notes
 

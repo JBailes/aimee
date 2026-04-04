@@ -2,6 +2,7 @@
 #include "aimee.h"
 #include "agent.h"
 #include "agent_tunnel.h"
+#include "http_retry.h"
 #include "workspace.h"
 #include "working_memory.h"
 #include "tasks.h"
@@ -422,10 +423,16 @@ int agent_execute(sqlite3 *db, const agent_t *agent, const char *system_prompt,
    struct timespec start, end;
    clock_gettime(CLOCK_MONOTONIC, &start);
 
-   /* HTTP POST */
+   /* HTTP POST with retry */
    char *response_body = NULL;
-   int http_status = agent_http_post(url, auth_header, body, &response_body, agent->timeout_ms,
-                                     agent->extra_headers);
+   config_t retry_cfg;
+   config_load(&retry_cfg);
+   int ra = retry_cfg.retry_max_attempts > 0 ? retry_cfg.retry_max_attempts : HTTP_RETRY_MAX_ATTEMPTS;
+   int rb = retry_cfg.retry_base_ms > 0 ? retry_cfg.retry_base_ms : HTTP_RETRY_BASE_MS;
+   int rm = retry_cfg.retry_max_ms > 0 ? retry_cfg.retry_max_ms : HTTP_RETRY_MAX_MS;
+
+   int http_status = http_retry_post(url, auth_header, body, &response_body, agent->timeout_ms,
+                                     agent->extra_headers, ra, rb, rm);
    free(body);
 
    /* Model fallback: if primary model fails with 400, retry with fallback_model */
@@ -445,8 +452,8 @@ int agent_execute(sqlite3 *db, const agent_t *agent, const char *system_prompt,
       cJSON_Delete(fb_req);
       if (fb_body)
       {
-         http_status = agent_http_post(url, auth_header, fb_body, &response_body, agent->timeout_ms,
-                                       agent->extra_headers);
+         http_status = http_retry_post(url, auth_header, fb_body, &response_body, agent->timeout_ms,
+                                       agent->extra_headers, ra, rb, rm);
          free(fb_body);
       }
    }

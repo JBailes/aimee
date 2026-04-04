@@ -3,6 +3,7 @@
 #include "agent.h"
 #include "agent_protocol.h"
 #include "agent_tunnel.h"
+#include "http_retry.h"
 #include "cJSON.h"
 #include <ctype.h>
 #include <errno.h>
@@ -181,7 +182,7 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
    /* Stuck detection state */
    char last_tool_sig[256] = {0};
    int repeat_count = 0;
-   int transient_retries = 0;
+   (void)0; /* transient retries handled by http_retry_post */
 
    /* Adaptive context refresh: more frequent for complex tasks (many tool calls),
     * less frequent for simple ones. Start at 5, decrease as calls accumulate. */
@@ -245,12 +246,20 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
       /* Log request trace */
       agent_trace_log(db, 0, turn, "request", body, NULL, NULL, NULL, NULL);
 
-      /* POST */
+      /* POST with automatic retry on transient errors */
       char *response_body = NULL;
       int remaining = total_timeout_ms - elapsed_ms;
       int per_call = (agent->timeout_ms < remaining) ? agent->timeout_ms : remaining;
-      int http_status =
-          agent_http_post(url, auth_header, body, &response_body, per_call, agent->extra_headers);
+
+      config_t retry_cfg;
+      config_load(&retry_cfg);
+      int ra = retry_cfg.retry_max_attempts > 0 ? retry_cfg.retry_max_attempts
+                                                 : HTTP_RETRY_MAX_ATTEMPTS;
+      int rb = retry_cfg.retry_base_ms > 0 ? retry_cfg.retry_base_ms : HTTP_RETRY_BASE_MS;
+      int rm = retry_cfg.retry_max_ms > 0 ? retry_cfg.retry_max_ms : HTTP_RETRY_MAX_MS;
+
+      int http_status = http_retry_post(url, auth_header, body, &response_body, per_call,
+                                        agent->extra_headers, ra, rb, rm);
       free(body);
 
       /* Model fallback on first turn: if 400, retry with fallback_model */
@@ -273,37 +282,14 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
          cJSON_Delete(fb_req);
          if (fb_body)
          {
-            http_status = agent_http_post(url, auth_header, fb_body, &response_body, per_call,
-                                          fb_agent.extra_headers);
+            http_status = http_retry_post(url, auth_header, fb_body, &response_body, per_call,
+                                          fb_agent.extra_headers, ra, rb, rm);
             free(fb_body);
          }
       }
 
       /* Update provider health cache */
       provider_health_update(agent->provider, http_status);
-
-      /* --- Transient error retry: connection failures and 503 --- */
-      if (http_status < 0 ||
-          (http_status == 503 && response_body && strstr(response_body, "Loading model")))
-      {
-         free(response_body);
-         response_body = NULL;
-         if (transient_retries < 3)
-         {
-            transient_retries++;
-            int wait_sec = transient_retries * 5;
-            fprintf(stderr, "agent: transient error, retrying in %ds (%d/3)...\n", wait_sec,
-                    transient_retries);
-            sleep((unsigned)wait_sec);
-            continue; /* retry same turn */
-         }
-         provider_err_class_t cls = provider_classify_error(http_status);
-         snprintf(out->error, sizeof(out->error),
-                  "provider '%s' %s Local commands (memory, index, rules, db) still work. "
-                  "Run 'aimee agent test %s' for diagnostics.",
-                  agent->name, provider_error_message(cls), agent->name);
-         break;
-      }
 
       /* --- Context overflow: truncate old messages and retry --- */
       if (http_status == 400 && response_body &&
@@ -358,8 +344,7 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
          break;
       }
 
-      /* Reset transient retry counter on success */
-      transient_retries = 0;
+      /* (transient retries handled by http_retry_post) */
 
       /* Parse response */
       parsed_response_t parsed;

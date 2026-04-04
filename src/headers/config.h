@@ -28,6 +28,12 @@ typedef struct config
    char verify_cmd[512];
    char verify_role[32];
    char verify_prompt[2048];
+
+   /* API retry: exponential backoff for transient provider failures.
+    * Set retry_max_attempts=0 to disable retries. */
+   int retry_max_attempts; /* max retries (default 3) */
+   int retry_base_ms;      /* initial backoff delay (default 1000) */
+   int retry_max_ms;       /* backoff ceiling (default 30000) */
 } config_t;
 
 /* Config schema types for validation */

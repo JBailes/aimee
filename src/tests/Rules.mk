@@ -29,7 +29,8 @@ TEST_TARGETS = tests/unit-test-util tests/unit-test-db tests/unit-test-rules \
                tests/unit-test-cmd-core tests/unit-test-cmd-work \
                tests/unit-test-client-integrations tests/unit-test-mcp-git \
                tests/unit-test-platform-process \
-               tests/unit-test-dstr
+               tests/unit-test-dstr \
+               tests/unit-test-http-retry
 
 unit-tests: $(BINARY) $(TEST_TARGETS)
 	@for t in $(TEST_TARGETS); do echo "  $$t"; ./$$t || exit 1; done
@@ -88,7 +89,7 @@ tests/unit-test-agent: $(OBJDIR)/tests/test_agent.o $(OBJDIR)/agent.o $(OBJDIR)/
                       $(OBJDIR)/agent_context.o $(OBJDIR)/agent_config.o \
                       $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o $(OBJDIR)/agent_coord.o \
                       $(OBJDIR)/agent_jobs.o $(OBJDIR)/agent_tools.o $(OBJDIR)/agent_http.o \
-                      $(OBJDIR)/agent_tunnel.o \
+                      $(OBJDIR)/http_retry.o $(OBJDIR)/agent_tunnel.o \
                       $(OBJDIR)/db.o $(OBJDIR)/config.o $(OBJDIR)/util.o $(OBJDIR)/text.o \
                       $(OBJDIR)/platform_random.o $(OBJDIR)/cJSON.o \
                       $(OBJDIR)/rules.o $(OBJDIR)/feedback.o $(OBJDIR)/memory.o \
@@ -142,7 +143,7 @@ tests/unit-test-workspace: $(OBJDIR)/tests/test_workspace.o $(TEST_DATA_OBJS) \
                           $(OBJDIR)/agent_protocol.o $(OBJDIR)/agent_policy.o \
                           $(OBJDIR)/agent_context.o $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o \
                           $(OBJDIR)/agent_coord.o $(OBJDIR)/agent_jobs.o $(OBJDIR)/agent_tools.o \
-                          $(OBJDIR)/agent_http.o $(OBJDIR)/agent_tunnel.o
+                          $(OBJDIR)/agent_http.o $(OBJDIR)/http_retry.o $(OBJDIR)/agent_tunnel.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
 
 tests/unit-test-working-memory: $(OBJDIR)/tests/test_working_memory.o $(TEST_CORE_OBJS) \
@@ -166,7 +167,8 @@ tests/unit-test-context-assembly: $(OBJDIR)/tests/test_context_assembly.o $(TEST
                                  $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o \
                                  $(OBJDIR)/agent_coord.o $(OBJDIR)/agent_jobs.o \
                                  $(OBJDIR)/agent_tools.o $(OBJDIR)/agent_http.o \
-                                 $(OBJDIR)/agent_tunnel.o $(OBJDIR)/working_memory.o \
+                                 $(OBJDIR)/http_retry.o $(OBJDIR)/agent_tunnel.o \
+                                 $(OBJDIR)/working_memory.o \
                                  $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/workspace.o \
                                  $(OBJDIR)/cmd_describe.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
@@ -240,6 +242,10 @@ tests/unit-test-platform-process: $(OBJDIR)/tests/test_platform_process.o \
 
 tests/unit-test-dstr: $(OBJDIR)/tests/test_dstr.o $(OBJDIR)/dstr.o
 	$(CC) -o $@ $^ $(L_MINIMAL)
+
+tests/unit-test-http-retry: $(OBJDIR)/tests/test_http_retry.o $(OBJDIR)/http_retry.o \
+                            $(OBJDIR)/agent_http.o $(TEST_CORE_OBJS)
+	$(CC) -o $@ $^ $(TEST_L_FLAGS)
 
 $(OBJDIR)/tests/%.o: tests/%.c
 	@mkdir -p $(OBJDIR)/tests
