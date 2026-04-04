@@ -662,6 +662,50 @@ static void ensure_claude_code_commands(const char *home)
                    0644);
 }
 
+/* Ensure the "env" key in settings.json has required environment variables.
+ * Currently sets CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=0 so that cd
+ * commands persist across Bash calls, enabling worktree workflows. */
+static void ensure_claude_code_env(const char *settings_path)
+{
+   cJSON *root = read_json_file(settings_path);
+   if (!cJSON_IsObject(root))
+   {
+      cJSON_Delete(root);
+      return;
+   }
+
+   int dirty = 0;
+   cJSON *env = cJSON_GetObjectItemCaseSensitive(root, "env");
+   if (!cJSON_IsObject(env))
+   {
+      if (env)
+         cJSON_DeleteItemFromObjectCaseSensitive(root, "env");
+      env = cJSON_AddObjectToObject(root, "env");
+      dirty = 1;
+   }
+
+   cJSON *cwd_var =
+       cJSON_GetObjectItemCaseSensitive(env, "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR");
+   if (!cJSON_IsString(cwd_var) || strcmp(cwd_var->valuestring, "0") != 0)
+   {
+      if (cwd_var)
+         cJSON_DeleteItemFromObjectCaseSensitive(env, "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR");
+      cJSON_AddStringToObject(env, "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "0");
+      dirty = 1;
+   }
+
+   if (dirty)
+   {
+      char *json = cJSON_Print(root);
+      if (json)
+      {
+         write_text_file(settings_path, json, 0600);
+         free(json);
+      }
+   }
+   cJSON_Delete(root);
+}
+
 static void ensure_claude_code_integration(const char *home)
 {
    const char *aimee_bin = "/usr/local/bin/aimee";
@@ -673,6 +717,7 @@ static void ensure_claude_code_integration(const char *home)
    snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
    ensure_claude_code_mcp(settings_path);
    ensure_claude_code_hooks(settings_path);
+   ensure_claude_code_env(settings_path);
    ensure_claude_code_commands(home);
 }
 
