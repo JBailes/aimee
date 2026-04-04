@@ -28,7 +28,8 @@ TEST_TARGETS = tests/unit-test-util tests/unit-test-db tests/unit-test-rules \
                tests/unit-test-cmd-branch \
                tests/unit-test-cmd-core tests/unit-test-cmd-work \
                tests/unit-test-client-integrations tests/unit-test-mcp-git \
-               tests/unit-test-platform-process
+               tests/unit-test-platform-process \
+               tests/unit-test-dstr
 
 unit-tests: $(BINARY) $(TEST_TARGETS)
 	@for t in $(TEST_TARGETS); do echo "  $$t"; ./$$t || exit 1; done
@@ -232,6 +233,9 @@ tests/unit-test-mcp-git: $(OBJDIR)/tests/test_mcp_git.o $(OBJDIR)/mcp_git.o \
 
 tests/unit-test-platform-process: $(OBJDIR)/tests/test_platform_process.o \
                                   $(OBJDIR)/platform_process.o
+	$(CC) -o $@ $^ $(L_MINIMAL)
+
+tests/unit-test-dstr: $(OBJDIR)/tests/test_dstr.o $(OBJDIR)/dstr.o
 	$(CC) -o $@ $^ $(L_MINIMAL)
 
 $(OBJDIR)/tests/%.o: tests/%.c
