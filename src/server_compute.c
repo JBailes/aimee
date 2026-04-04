@@ -387,9 +387,8 @@ static void delegate_worker(void *arg)
     * the agent config's tools_enabled flag. */
    agent_result_t result;
    memset(&result, 0, sizeof(result));
-   /* NOTE: agent_http_init() (curl_global_init) is called once in server_main.c.
-    * Do NOT call it here — it is not thread-safe and concurrent calls corrupt
-    * curl internal state, causing intermittent HTTP request failures. */
+   /* NOTE: agent_http_init() (SSL_CTX setup) is called once in server_main.c.
+    * Do NOT call it here — the global SSL_CTX is shared across threads. */
 
    int rc = agent_run_with_tools(cctx->db, &acfg, role, system_prompt, prompt, max_tokens, &result);
 
