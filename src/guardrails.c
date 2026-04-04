@@ -1052,22 +1052,37 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
    }
 
    /* Git command interception: block raw git/gh commands from Bash and redirect
-    * to aimee MCP git tools for token savings. Gated on config.block_raw_git. */
+    * to aimee MCP git tools for token savings. Gated on config.block_raw_git.
+    * Allow raw git when cwd is inside a worktree (already isolated) or when
+    * the aimee CLI is used (e.g., "aimee git status" or "aimee --json git"). */
    if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) && is_git_command(cmd->valuestring))
    {
       config_t git_cfg;
       config_load(&git_cfg);
       if (git_cfg.block_raw_git)
       {
-         snprintf(msg_buf, msg_len,
-                  "BLOCKED: use aimee MCP git tools instead of raw git/gh commands. "
-                  "Available: git_status, git_commit, git_push, git_pull, git_fetch, "
-                  "git_clone, git_branch, git_log, git_diff_summary, git_stash, "
-                  "git_tag, git_reset, git_restore, git_verify, git_pr "
-                  "(via mcp__aimee__ prefix). "
-                  "git_pr handles all gh pr/issue operations.");
-         cJSON_Delete(root);
-         return 2;
+         /* Allow raw git inside worktrees — the workspace is already isolated.
+          * Detect worktree by checking if cwd is under a known worktree path. */
+         int cwd_is_worktree = (strstr(cwd, ".claude/worktrees") != NULL ||
+                                strstr(cwd, "/.config/aimee/worktrees/") != NULL);
+         /* Allow aimee CLI git wrappers (they go through aimee's own checks) */
+         const char *c = cmd->valuestring;
+         while (*c && isspace((unsigned char)*c))
+            c++;
+         int is_aimee_git = (strncmp(c, "aimee ", 6) == 0 || strncmp(c, "aimee\t", 6) == 0);
+
+         if (!cwd_is_worktree && !is_aimee_git)
+         {
+            snprintf(msg_buf, msg_len,
+                     "BLOCKED: use aimee MCP git tools instead of raw git/gh commands. "
+                     "Available: git_status, git_commit, git_push, git_pull, git_fetch, "
+                     "git_clone, git_branch, git_log, git_diff_summary, git_stash, "
+                     "git_tag, git_reset, git_restore, git_verify, git_pr "
+                     "(via mcp__aimee__ prefix). "
+                     "git_pr handles all gh pr/issue operations.");
+            cJSON_Delete(root);
+            return 2;
+         }
       }
    }
 
