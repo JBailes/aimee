@@ -1465,7 +1465,7 @@ int main(void)
    sqlite3 *db = db_open_fast(db_default_path());
    if (!db)
    {
-      fprintf(stderr, "aimee-mcp: failed to open database\n");
+      fprintf(stderr, "aimee: failed to open database\n");
       return 1;
    }
 

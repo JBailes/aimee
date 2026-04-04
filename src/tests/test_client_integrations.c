@@ -127,9 +127,9 @@ static void test_claude_mcp_creates_fresh_settings(void)
    char tmpdir[] = "/tmp/aimee-test-claude-XXXXXX";
    assert(mkdtemp(tmpdir) != NULL);
 
-   /* Create a fake aimee-mcp binary so stat() succeeds */
+   /* Create a fake aimee binary so stat() succeeds */
    char fake_bin[512];
-   snprintf(fake_bin, sizeof(fake_bin), "%s/fake-mcp", tmpdir);
+   snprintf(fake_bin, sizeof(fake_bin), "%s/fake-aimee", tmpdir);
    FILE *fp = fopen(fake_bin, "w");
    assert(fp != NULL);
    fputs("#!/bin/sh\n", fp);
