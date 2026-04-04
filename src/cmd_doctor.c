@@ -59,8 +59,7 @@ static void check_database(check_result_t *r, config_t *cfg)
    {
       r->status = CHECK_ERROR;
       snprintf(r->message, sizeof(r->message), "cannot open");
-      snprintf(r->remediation, sizeof(r->remediation),
-               "Run 'aimee init' to recreate the database");
+      snprintf(r->remediation, sizeof(r->remediation), "Run 'aimee init' to recreate the database");
       return;
    }
 
@@ -76,9 +75,9 @@ static void check_database(check_result_t *r, config_t *cfg)
    int fts_ok = 1;
    stmt = NULL;
    if (sqlite3_prepare_v2(db,
-                           "INSERT INTO memories_fts(memories_fts, rank, content) "
-                           "VALUES('integrity-check', 1, 1)",
-                           -1, &stmt, NULL) == SQLITE_OK)
+                          "INSERT INTO memories_fts(memories_fts, rank, content) "
+                          "VALUES('integrity-check', 1, 1)",
+                          -1, &stmt, NULL) == SQLITE_OK)
    {
       int rc = sqlite3_step(stmt);
       if (rc != SQLITE_OK && rc != SQLITE_DONE)
@@ -200,8 +199,8 @@ static void check_config(check_result_t *r, config_t *cfg)
    if (missing > 0)
    {
       r->status = CHECK_WARN;
-      snprintf(r->message, sizeof(r->message), "%d workspace(s), %d missing",
-               cfg->workspace_count, missing);
+      snprintf(r->message, sizeof(r->message), "%d workspace(s), %d missing", cfg->workspace_count,
+               missing);
       snprintf(r->remediation, sizeof(r->remediation),
                "Run 'aimee workspace list' and remove stale entries");
    }
@@ -308,8 +307,7 @@ static void check_mcp(check_result_t *r, config_t *cfg)
    {
       r->status = CHECK_WARN;
       snprintf(r->message, sizeof(r->message), "no workspaces to check");
-      snprintf(r->remediation, sizeof(r->remediation),
-               "Run 'aimee setup' to configure workspaces");
+      snprintf(r->remediation, sizeof(r->remediation), "Run 'aimee setup' to configure workspaces");
    }
    else if (found == 0)
    {
@@ -321,8 +319,7 @@ static void check_mcp(check_result_t *r, config_t *cfg)
    else
    {
       r->status = CHECK_OK;
-      snprintf(r->message, sizeof(r->message), "%d/%d workspace(s)", found,
-               cfg->workspace_count);
+      snprintf(r->message, sizeof(r->message), "%d/%d workspace(s)", found, cfg->workspace_count);
    }
 }
 
@@ -344,7 +341,7 @@ static void check_secrets(check_result_t *r)
    char buf[256];
    int count = 0;
    static const char *keys[] = {"anthropic_api_key", "openai_api_key", "gemini_api_key",
-                                 "openrouter_api_key"};
+                                "openrouter_api_key"};
    for (int i = 0; i < 4; i++)
    {
       if (secret_load(keys[i], buf, sizeof(buf)) == 0 && buf[0])
@@ -353,8 +350,7 @@ static void check_secrets(check_result_t *r)
    }
 
    r->status = CHECK_OK;
-   snprintf(r->message, sizeof(r->message), "%s backend, %d key(s) stored", backend->name,
-            count);
+   snprintf(r->message, sizeof(r->message), "%s backend, %d key(s) stored", backend->name, count);
 }
 
 static void check_index(check_result_t *r, config_t *cfg)
@@ -372,8 +368,8 @@ static void check_index(check_result_t *r, config_t *cfg)
    /* Count indexed projects */
    sqlite3_stmt *stmt = NULL;
    int project_count = 0;
-   if (sqlite3_prepare_v2(db, "SELECT COUNT(DISTINCT project) FROM symbols", -1, &stmt,
-                           NULL) == SQLITE_OK &&
+   if (sqlite3_prepare_v2(db, "SELECT COUNT(DISTINCT project) FROM symbols", -1, &stmt, NULL) ==
+           SQLITE_OK &&
        sqlite3_step(stmt) == SQLITE_ROW)
       project_count = sqlite3_column_int(stmt, 0);
    if (stmt)
@@ -421,8 +417,7 @@ static void check_index(check_result_t *r, config_t *cfg)
             r->status = CHECK_WARN;
             snprintf(r->message, sizeof(r->message),
                      "%d project(s), stale (%.0fh since last index)", project_count, hours);
-            snprintf(r->remediation, sizeof(r->remediation),
-                     "Run 'aimee setup' to re-index");
+            snprintf(r->remediation, sizeof(r->remediation), "Run 'aimee setup' to re-index");
          }
       }
    }
@@ -456,16 +451,16 @@ static void check_memory(check_result_t *r, config_t *cfg)
       sqlite3_finalize(stmt);
 
    stmt = NULL;
-   if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM memories WHERE tier = 'L2'", -1, &stmt,
-                           NULL) == SQLITE_OK &&
+   if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM memories WHERE tier = 'L2'", -1, &stmt, NULL) ==
+           SQLITE_OK &&
        sqlite3_step(stmt) == SQLITE_ROW)
       l2_count = sqlite3_column_int(stmt, 0);
    if (stmt)
       sqlite3_finalize(stmt);
 
    stmt = NULL;
-   if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM memories WHERE tier = 'L3'", -1, &stmt,
-                           NULL) == SQLITE_OK &&
+   if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM memories WHERE tier = 'L3'", -1, &stmt, NULL) ==
+           SQLITE_OK &&
        sqlite3_step(stmt) == SQLITE_ROW)
       l3_count = sqlite3_column_int(stmt, 0);
    if (stmt)
@@ -475,9 +470,9 @@ static void check_memory(check_result_t *r, config_t *cfg)
    int orphaned_l0 = 0;
    stmt = NULL;
    if (sqlite3_prepare_v2(db,
-                           "SELECT COUNT(*) FROM memories WHERE tier = 'L0' "
-                           "AND created_at < datetime('now', '-7 days')",
-                           -1, &stmt, NULL) == SQLITE_OK &&
+                          "SELECT COUNT(*) FROM memories WHERE tier = 'L0' "
+                          "AND created_at < datetime('now', '-7 days')",
+                          -1, &stmt, NULL) == SQLITE_OK &&
        sqlite3_step(stmt) == SQLITE_ROW)
       orphaned_l0 = sqlite3_column_int(stmt, 0);
    if (stmt)
@@ -495,16 +490,15 @@ static void check_memory(check_result_t *r, config_t *cfg)
    else if (orphaned_l0 > 0)
    {
       r->status = CHECK_WARN;
-      snprintf(r->message, sizeof(r->message), "L2: %d, L3: %d, %d orphaned L0 entries",
-               l2_count, l3_count, orphaned_l0);
+      snprintf(r->message, sizeof(r->message), "L2: %d, L3: %d, %d orphaned L0 entries", l2_count,
+               l3_count, orphaned_l0);
       snprintf(r->remediation, sizeof(r->remediation),
                "Run 'aimee doctor --fix' to prune orphaned L0 memories");
    }
    else
    {
       r->status = CHECK_OK;
-      snprintf(r->message, sizeof(r->message), "L2: %d facts, L3: %d episodes", l2_count,
-               l3_count);
+      snprintf(r->message, sizeof(r->message), "L2: %d facts, L3: %d episodes", l2_count, l3_count);
    }
 }
 
@@ -518,9 +512,9 @@ static int fix_orphaned_l0(config_t *cfg)
 
    char *errmsg = NULL;
    int rc = sqlite3_exec(db,
-                          "DELETE FROM memories WHERE tier = 'L0' "
-                          "AND created_at < datetime('now', '-7 days')",
-                          NULL, NULL, &errmsg);
+                         "DELETE FROM memories WHERE tier = 'L0' "
+                         "AND created_at < datetime('now', '-7 days')",
+                         NULL, NULL, &errmsg);
    int changes = sqlite3_changes(db);
    if (errmsg)
    {
