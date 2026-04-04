@@ -10,37 +10,21 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Remove a delegate worktree by finding the workspace root from the original CWD
- * and running `git worktree remove --force`. */
-static void delegate_worktree_cleanup(const char *wt_path, const char *orig_cwd, int keep)
+/* Restore CWD after delegate completes and optionally clean up the worktree. */
+static void delegate_worktree_restore(const char *orig_cwd, const char *git_root, int keep)
 {
-   if (!wt_path[0] || !orig_cwd[0])
+   if (orig_cwd[0])
+      (void)chdir(orig_cwd);
+   if (!git_root[0])
       return;
-   (void)chdir(orig_cwd);
    if (keep)
    {
+      char wt_path[MAX_PATH_LEN];
+      worktree_sibling_path(git_root, session_id(), wt_path, sizeof(wt_path));
       fprintf(stderr, "aimee: keeping delegate worktree at %s\n", wt_path);
       return;
    }
-   char ws_root[MAX_PATH_LEN];
-   snprintf(ws_root, sizeof(ws_root), "%s", orig_cwd);
-   for (int d = 0; d < 20; d++)
-   {
-      char gd[MAX_PATH_LEN];
-      snprintf(gd, sizeof(gd), "%s/.git", ws_root);
-      struct stat gs;
-      if (stat(gd, &gs) == 0)
-         break;
-      char *sl = strrchr(ws_root, '/');
-      if (!sl || sl == ws_root)
-         break;
-      *sl = '\0';
-   }
-   char *rm_out = NULL;
-   const char *rm_argv[] = {"git", "-C", ws_root, "worktree", "remove", "--force", wt_path, NULL};
-   safe_exec_capture(rm_argv, &rm_out, 256);
-   free(rm_out);
-   fprintf(stderr, "aimee: removed delegate worktree %s\n", wt_path);
+   worktree_cleanup(git_root, session_id());
 }
 
 /* --- cmd_delegate --- */
@@ -98,7 +82,7 @@ static void delegate_print_help(void)
                    "  --timeout N        Timeout in milliseconds\n"
                    "  --retry N          Retry on failure (up to N times)\n"
                    "  --verify CMD       Run verification command after completion\n"
-                   "  --worktree BRANCH  Execute in an isolated git worktree\n"
+                   "  --worktree BRANCH  Check out BRANCH in the session worktree\n"
                    "  --coordination     Enable multi-agent coordination\n"
                    "  --vote N           Run N agents and pick best result\n"
                    "  --plan             Use plan-mode execution\n"
@@ -423,73 +407,69 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
 
    const char *final_prompt = effective_prompt ? effective_prompt : prompt;
 
-   /* --worktree BRANCH: create a temporary git worktree for isolated branch work.
-    * The delegate runs with CWD set to the worktree so all tool_bash commands
-    * (git rebase, git push, etc.) operate on the isolated copy.
-    * Cleaned up after delegate completes unless --keep-worktree is set. */
+   /* Worktree isolation: if we're inside a git repo, use the standard sibling
+    * worktree (.aimee-<project>-<session>) so the delegate runs in isolation.
+    * This is the same worktree pattern used by hooks, MCP, and main — one
+    * canonical location per project per session. */
    char worktree_path[MAX_PATH_LEN] = "";
    char original_cwd[MAX_PATH_LEN] = "";
-   if (worktree_branch && worktree_branch[0])
+   char delegate_git_root[MAX_PATH_LEN] = "";
    {
-      if (!getcwd(original_cwd, sizeof(original_cwd)))
-         fatal("cannot get current working directory");
-
-      /* Generate a unique worktree directory under the aimee worktrees area */
-      char wt_base[MAX_PATH_LEN];
-      snprintf(wt_base, sizeof(wt_base), "%s/delegate-worktrees", config_default_dir());
-      mkdir(wt_base, 0700);
-
-      char wt_id[32];
-      generate_task_id(wt_id, sizeof(wt_id));
-      snprintf(worktree_path, sizeof(worktree_path), "%s/%s", wt_base, wt_id);
-
-      /* Detect workspace root (nearest .git directory) */
-      char ws_root[MAX_PATH_LEN];
-      snprintf(ws_root, sizeof(ws_root), "%s", original_cwd);
-      int found_git = 0;
-      for (int depth = 0; depth < 20; depth++)
+      char cwd_buf[MAX_PATH_LEN];
+      if (getcwd(cwd_buf, sizeof(cwd_buf)) && !is_aimee_worktree_path(cwd_buf) &&
+          git_repo_root(cwd_buf, delegate_git_root, sizeof(delegate_git_root)) == 0)
       {
-         char git_dir[MAX_PATH_LEN];
-         snprintf(git_dir, sizeof(git_dir), "%s/.git", ws_root);
-         struct stat gst;
-         if (stat(git_dir, &gst) == 0)
+         snprintf(original_cwd, sizeof(original_cwd), "%s", cwd_buf);
+         const char *sid = session_id();
+
+         if (worktree_create_sibling(delegate_git_root, sid) == 0)
          {
-            found_git = 1;
-            break;
+            worktree_sibling_path(delegate_git_root, sid, worktree_path, sizeof(worktree_path));
+
+            /* Compute equivalent subpath inside the worktree */
+            size_t root_len = strlen(delegate_git_root);
+            const char *suffix = cwd_buf + root_len;
+            char target[MAX_PATH_LEN];
+            snprintf(target, sizeof(target), "%s%s", worktree_path, suffix);
+
+            struct stat tst;
+            if (stat(target, &tst) == 0 && S_ISDIR(tst.st_mode))
+            {
+               if (chdir(target) != 0)
+                  fprintf(stderr, "aimee: warning: could not chdir to worktree: %s\n", target);
+               else
+                  fprintf(stderr, "aimee: delegate running in worktree %s\n", worktree_path);
+            }
+            else if (chdir(worktree_path) != 0)
+            {
+               fprintf(stderr, "aimee: warning: could not chdir to worktree: %s\n", worktree_path);
+            }
+            else
+            {
+               fprintf(stderr, "aimee: delegate running in worktree %s\n", worktree_path);
+            }
+
+            /* If --worktree BRANCH was specified, check out that branch */
+            if (worktree_branch && worktree_branch[0])
+            {
+               char cmd[MAX_PATH_LEN + 256];
+               snprintf(cmd, sizeof(cmd), "git -C '%s' checkout '%s' 2>&1", worktree_path,
+                        worktree_branch);
+               int git_rc;
+               char *git_out = run_cmd(cmd, &git_rc);
+               if (git_rc != 0)
+                  fprintf(stderr, "aimee: warning: could not checkout branch '%s': %s\n",
+                          worktree_branch, git_out ? git_out : "unknown");
+               free(git_out);
+            }
          }
-         char *sl = strrchr(ws_root, '/');
-         if (!sl || sl == ws_root)
-            break;
-         *sl = '\0';
+         else
+         {
+            fprintf(stderr, "aimee: warning: could not create sibling worktree for %s\n",
+                    delegate_git_root);
+            delegate_git_root[0] = '\0';
+         }
       }
-      if (!found_git)
-         fatal("--worktree requires a git repository (no .git found above cwd)");
-
-      /* Create the worktree on the specified branch */
-      char *wt_out = NULL;
-      const char *wt_argv[] = {"git", "-C",          ws_root,         "worktree",
-                               "add", worktree_path, worktree_branch, NULL};
-      int wt_rc = safe_exec_capture(wt_argv, &wt_out, 1024);
-      if (wt_rc != 0)
-      {
-         /* Branch might not exist locally -- try creating from origin */
-         free(wt_out);
-         wt_out = NULL;
-         char origin_ref[256];
-         snprintf(origin_ref, sizeof(origin_ref), "origin/%s", worktree_branch);
-         const char *wt_argv2[] = {"git",         "-C", ws_root,         "worktree", "add",
-                                   worktree_path, "-b", worktree_branch, origin_ref, NULL};
-         wt_rc = safe_exec_capture(wt_argv2, &wt_out, 1024);
-         if (wt_rc != 0)
-            fatal("failed to create worktree for branch '%s': %s", worktree_branch,
-                  wt_out ? wt_out : "unknown error");
-      }
-      free(wt_out);
-      fprintf(stderr, "aimee: created delegate worktree at %s (branch: %s)\n", worktree_path,
-              worktree_branch);
-
-      if (chdir(worktree_path) != 0)
-         fatal("cannot chdir to worktree: %s", worktree_path);
    }
 
    /* Apply per-delegate timeout override */
@@ -521,8 +501,8 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
       fprintf(stderr, "\n--- System Prompt ---\n%s\n", assembled ? assembled : "(none)");
       fprintf(stderr, "\n--- User Prompt ---\n%s\n", final_prompt);
       fprintf(stderr, "\n--- Tools: %s ---\n", force_tools ? "FORCED" : "config-based");
-      if (worktree_branch)
-         fprintf(stderr, "\n--- Worktree: %s (branch: %s) ---\n", worktree_path, worktree_branch);
+      if (worktree_path[0])
+         fprintf(stderr, "\n--- Worktree: %s ---\n", worktree_path);
       free(assembled);
       db_stmt_cache_clear();
       db_close(db);
@@ -596,7 +576,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
       char pid_path[MAX_PATH_LEN];
       snprintf(pid_path, sizeof(pid_path), "%s/%s.pid", tasks_dir, task_id);
       unlink(pid_path);
-      delegate_worktree_cleanup(worktree_path, original_cwd, keep_worktree);
+      delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
       free(result.response);
       free(effective_prompt);
       free(file_prompt);
@@ -764,7 +744,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
             fprintf(stderr, "aimee: WARN: delegate output above may contain errors "
                             "(verify failed)\n");
          }
-         delegate_worktree_cleanup(worktree_path, original_cwd, keep_worktree);
+         delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
          free(result.response);
          free(effective_prompt);
          free(file_prompt);
@@ -835,7 +815,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
          if (!of)
          {
             fprintf(stderr, "aimee: cannot write to --output path: %s\n", output_path);
-            delegate_worktree_cleanup(worktree_path, original_cwd, keep_worktree);
+            delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
             free(result.response);
             free(effective_prompt);
             free(file_prompt);
@@ -855,7 +835,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
    else
    {
       fprintf(stderr, "aimee delegate failed: %s\n", result.error);
-      delegate_worktree_cleanup(worktree_path, original_cwd, keep_worktree);
+      delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
       free(result.response);
       free(effective_prompt);
       free(file_prompt);
@@ -863,7 +843,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
       exit(2);
    }
 
-   delegate_worktree_cleanup(worktree_path, original_cwd, keep_worktree);
+   delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
 
    free(result.response);
    free(effective_prompt);
