@@ -817,6 +817,8 @@ int memory_stats(sqlite3 *db, memory_stats_t *out)
             out->kind_counts[6] = c;
          else if (strcmp(k, KIND_POLICY) == 0)
             out->kind_counts[7] = c;
+         else if (strcmp(k, KIND_WORKFLOW) == 0)
+            out->kind_counts[8] = c;
       }
       sqlite3_reset(stmt);
    }

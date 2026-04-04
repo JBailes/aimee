@@ -684,6 +684,134 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
       }
    }
 
+   /* Auto-provision worktrees: if no worktrees exist and a write targets a workspace,
+    * create worktree entries on the fly so enforcement kicks in. This prevents writes
+    * to the real repo when session-start didn't run (e.g., MCP tools, late hook setup). */
+   if (state->worktree_count == 0 &&
+       (is_edit_tool(tool_name) || (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
+                                    is_write_command(cmd->valuestring))))
+   {
+      config_t acfg;
+      config_load(&acfg);
+
+      /* Determine the target path for the write */
+      const char *write_target = cwd;
+      char wnorm[MAX_PATH_LEN];
+      if (is_edit_tool(tool_name) && fp && cJSON_IsString(fp))
+      {
+         normalize_path(fp->valuestring, cwd, wnorm, sizeof(wnorm));
+         write_target = wnorm;
+      }
+
+      /* Check if the write target is inside any configured workspace */
+      int matched_ws = -1;
+      size_t best_len = 0;
+      for (int i = 0; i < acfg.workspace_count; i++)
+      {
+         size_t wlen = strlen(acfg.workspaces[i]);
+         if (wlen == 0)
+            continue;
+         if (strncmp(write_target, acfg.workspaces[i], wlen) == 0 &&
+             (write_target[wlen] == '/' || write_target[wlen] == '\0'))
+         {
+            if (wlen > best_len)
+            {
+               matched_ws = i;
+               best_len = wlen;
+            }
+         }
+      }
+
+      if (matched_ws >= 0)
+      {
+         /* Auto-provision worktree entries for all configured workspaces */
+         const char *sid = session_id();
+         for (int i = 0; i < acfg.workspace_count && state->worktree_count < MAX_WORKTREES; i++)
+         {
+            const char *slash = strrchr(acfg.workspaces[i], '/');
+            const char *ws_name = slash ? slash + 1 : acfg.workspaces[i];
+
+            worktree_entry_t *w = &state->worktrees[state->worktree_count];
+            snprintf(w->name, sizeof(w->name), "%s", ws_name);
+            snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid,
+                     ws_name);
+            snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", acfg.workspaces[i]);
+            w->created = 0; /* deferred — worktree_ensure() will create on demand */
+            state->worktree_count++;
+         }
+
+         /* Also add cwd if it's a git repo not already covered */
+         if (cwd[0] && state->worktree_count < MAX_WORKTREES)
+         {
+            int covered = 0;
+            for (int i = 0; i < state->worktree_count; i++)
+            {
+               if (strcmp(state->worktrees[i].workspace_root, cwd) == 0)
+               {
+                  covered = 1;
+                  break;
+               }
+            }
+            if (!covered)
+            {
+               /* Check for .git directory as a lightweight git repo test */
+               char git_dir[MAX_PATH_LEN];
+               snprintf(git_dir, sizeof(git_dir), "%s/.git", cwd);
+               struct stat gst;
+               if (stat(git_dir, &gst) == 0)
+               {
+                  const char *slash = strrchr(cwd, '/');
+                  const char *ws_name = slash ? slash + 1 : cwd;
+
+                  worktree_entry_t *w = &state->worktrees[state->worktree_count];
+                  snprintf(w->name, sizeof(w->name), "%s", ws_name);
+                  snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid,
+                           ws_name);
+                  snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", cwd);
+                  w->created = 0;
+                  state->worktree_count++;
+               }
+            }
+         }
+
+         state->dirty = 1;
+         fprintf(stderr, "aimee: auto-provisioned %d worktree(s) — session-start did not run\n",
+                 state->worktree_count);
+
+         /* Eagerly create the worktree for the targeted workspace */
+         const char *ws_slash = strrchr(acfg.workspaces[matched_ws], '/');
+         const char *ws_name = ws_slash ? ws_slash + 1 : acfg.workspaces[matched_ws];
+         const char *wt_path = NULL;
+         for (int i = 0; i < state->worktree_count; i++)
+         {
+            if (strcmp(state->worktrees[i].name, ws_name) == 0)
+            {
+               if (worktree_ensure(&state->worktrees[i]) == 0)
+                  wt_path = state->worktrees[i].path;
+               break;
+            }
+         }
+
+         /* Block the write regardless of whether worktree creation succeeded.
+          * Writing to the real repo is never acceptable when a workspace is configured. */
+         if (wt_path)
+         {
+            snprintf(msg_buf, msg_len,
+                     "BLOCKED: write to real workspace path (worktree auto-provisioned). "
+                     "Use worktree instead: %s",
+                     wt_path);
+         }
+         else
+         {
+            snprintf(msg_buf, msg_len,
+                     "BLOCKED: write to real workspace path. "
+                     "Worktree auto-provision failed — run `aimee` to start a session first.");
+         }
+         cJSON_Delete(root);
+         return 2;
+      }
+   }
+
    /* Worktree enforcement: block writes to real workspace paths when a worktree exists */
    if (state->worktree_count > 0)
    {
