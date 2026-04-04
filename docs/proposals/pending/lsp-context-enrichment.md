@@ -79,6 +79,39 @@ Recommend **Option A** — it stays within aimee's single-toolchain philosophy a
 }
 ```
 
+### Prompt Rendering Format
+
+When injecting LSP context into agent prompts, use a structured markdown format (validated by claw-code's `lsp/types.rs`):
+
+```markdown
+# LSP context
+Focus: src/memory.c — 3 diagnostics across 2 files
+
+Diagnostics (showing 3 of 3):
+ - src/memory.c:42:5 [error] implicit declaration of function 'free_tier'
+ - src/memory.c:87:12 [warning] unused variable 'tmp'
+ - src/config.c:15:1 [warning] missing include guard
+
+Definitions (showing 2 of 2):
+ - free_tier: src/memory_promote.c:23
+ - config_load: src/config.c:45
+
+References (showing 3 of 8):
+ - free_tier: src/agent.c:112, src/tasks.c:55, src/server.c:201
+ (5 more omitted for brevity)
+```
+
+Key formatting rules:
+- Cap at 12 diagnostics and 12 definition/reference entries to control token budget
+- Severity labels: "error", "warning", "info", "hint"
+- Replace newlines in diagnostic messages with spaces
+- Include file:line:column coordinates for precise navigation
+
+### Webchat and Dashboard Integration
+
+- **Webchat**: Expose a `/api/lsp/diagnostics` endpoint; render diagnostic counts as a badge in the chat header (e.g., "2 errors, 1 warning")
+- **Dashboard**: Add an "LSP Health" card showing active servers, diagnostic counts per workspace, and server restart events
+
 ## Acceptance Criteria
 
 - [ ] `aimee mcp` exposes `lsp_diagnostics` tool returning structured diagnostics for a workspace
@@ -87,6 +120,9 @@ Recommend **Option A** — it stays within aimee's single-toolchain philosophy a
 - [ ] Post-edit hook automatically reports new diagnostics to the agent context
 - [ ] Works with at least rust-analyzer and gopls
 - [ ] LSP servers are started lazily (on first file touch) and shut down cleanly on session end
+- [ ] Prompt rendering caps at 12 diagnostics and 12 symbol entries
+- [ ] **Webchat**: diagnostic counts visible as badge in chat header
+- [ ] **Dashboard**: LSP health card shows active servers and diagnostic counts
 
 ## Owner and Effort
 
