@@ -1,6 +1,7 @@
 /* cmd_chat.c: interactive chat CLI with streaming and tool use (OpenAI + Anthropic) */
 #include "aimee.h"
 #include "agent_exec.h"
+#include "agent_protocol.h"
 #include "agent_tools.h"
 #include "commands.h"
 #include "cJSON.h"
@@ -1195,6 +1196,7 @@ void cmd_chat(app_ctx_t *ctx, int argc, char **argv)
       for (;;)
       {
          chat_reset_turn(&state);
+         messages_compact_consecutive(state.messages);
 
          int http_rc = chat_send(&state);
 

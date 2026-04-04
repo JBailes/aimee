@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include "aimee.h"
 #include "agent.h"
+#include "agent_protocol.h"
 #include "cJSON.h"
 
 /* --- Expose tool functions for testing via redeclaration --- */
@@ -581,6 +582,148 @@ static void test_dispatch_ctx_checkpoint(void)
    unlink(path);
 }
 
+/* --- messages_compact_consecutive tests --- */
+
+static cJSON *make_msg(const char *role, const char *content)
+{
+   cJSON *msg = cJSON_CreateObject();
+   cJSON_AddStringToObject(msg, "role", role);
+   cJSON_AddStringToObject(msg, "content", content);
+   return msg;
+}
+
+static void test_compact_empty(void)
+{
+   /* NULL and empty array */
+   assert(messages_compact_consecutive(NULL) == 0);
+
+   cJSON *arr = cJSON_CreateArray();
+   assert(messages_compact_consecutive(arr) == 0);
+   assert(cJSON_GetArraySize(arr) == 0);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_single(void)
+{
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("user", "hello"));
+   assert(messages_compact_consecutive(arr) == 0);
+   assert(cJSON_GetArraySize(arr) == 1);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_two_same_role(void)
+{
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("user", "hello"));
+   cJSON_AddItemToArray(arr, make_msg("user", "world"));
+   assert(messages_compact_consecutive(arr) == 1);
+   assert(cJSON_GetArraySize(arr) == 1);
+
+   const char *content =
+       cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 0), "content"));
+   assert(strcmp(content, "hello\n\nworld") == 0);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_five_same_role(void)
+{
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("user", "a"));
+   cJSON_AddItemToArray(arr, make_msg("user", "b"));
+   cJSON_AddItemToArray(arr, make_msg("user", "c"));
+   cJSON_AddItemToArray(arr, make_msg("user", "d"));
+   cJSON_AddItemToArray(arr, make_msg("user", "e"));
+   assert(messages_compact_consecutive(arr) == 4);
+   assert(cJSON_GetArraySize(arr) == 1);
+
+   const char *content =
+       cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 0), "content"));
+   assert(strcmp(content, "a\n\nb\n\nc\n\nd\n\ne") == 0);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_mixed_roles(void)
+{
+   /* user-user-assistant-user-user */
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("user", "u1"));
+   cJSON_AddItemToArray(arr, make_msg("user", "u2"));
+   cJSON_AddItemToArray(arr, make_msg("assistant", "a1"));
+   cJSON_AddItemToArray(arr, make_msg("user", "u3"));
+   cJSON_AddItemToArray(arr, make_msg("user", "u4"));
+   assert(messages_compact_consecutive(arr) == 2);
+   assert(cJSON_GetArraySize(arr) == 3);
+
+   const char *c0 =
+       cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 0), "content"));
+   assert(strcmp(c0, "u1\n\nu2") == 0);
+
+   const char *r1 = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 1), "role"));
+   assert(strcmp(r1, "assistant") == 0);
+
+   const char *c2 =
+       cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 2), "content"));
+   assert(strcmp(c2, "u3\n\nu4") == 0);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_no_consecutive(void)
+{
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("user", "u1"));
+   cJSON_AddItemToArray(arr, make_msg("assistant", "a1"));
+   cJSON_AddItemToArray(arr, make_msg("user", "u2"));
+   assert(messages_compact_consecutive(arr) == 0);
+   assert(cJSON_GetArraySize(arr) == 3);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_idempotent(void)
+{
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("user", "a"));
+   cJSON_AddItemToArray(arr, make_msg("user", "b"));
+   messages_compact_consecutive(arr);
+   assert(cJSON_GetArraySize(arr) == 1);
+
+   /* Second call should be a no-op */
+   assert(messages_compact_consecutive(arr) == 0);
+   assert(cJSON_GetArraySize(arr) == 1);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_skips_structured_content(void)
+{
+   /* Messages with tool_calls or non-string content should not be merged */
+   cJSON *arr = cJSON_CreateArray();
+   cJSON *msg1 = cJSON_CreateObject();
+   cJSON_AddStringToObject(msg1, "role", "assistant");
+   cJSON_AddNullToObject(msg1, "content");
+   cJSON_AddItemToArray(arr, msg1);
+
+   cJSON_AddItemToArray(arr, make_msg("assistant", "text response"));
+
+   /* These should not be merged because msg1 has null content */
+   assert(messages_compact_consecutive(arr) == 0);
+   assert(cJSON_GetArraySize(arr) == 2);
+   cJSON_Delete(arr);
+}
+
+static void test_compact_system_role(void)
+{
+   cJSON *arr = cJSON_CreateArray();
+   cJSON_AddItemToArray(arr, make_msg("system", "rule1"));
+   cJSON_AddItemToArray(arr, make_msg("system", "rule2"));
+   assert(messages_compact_consecutive(arr) == 1);
+   assert(cJSON_GetArraySize(arr) == 1);
+
+   const char *content =
+       cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 0), "content"));
+   assert(strcmp(content, "rule1\n\nrule2") == 0);
+   cJSON_Delete(arr);
+}
+
 int main(void)
 {
    test_agent_expand_env();
@@ -600,6 +743,15 @@ int main(void)
    test_checkpoint_ctx_isolation();
    test_checkpoint_ctx_new_file();
    test_dispatch_ctx_checkpoint();
+   test_compact_empty();
+   test_compact_single();
+   test_compact_two_same_role();
+   test_compact_five_same_role();
+   test_compact_mixed_roles();
+   test_compact_no_consecutive();
+   test_compact_idempotent();
+   test_compact_skips_structured_content();
+   test_compact_system_role();
    printf("agent: all tests passed\n");
    return 0;
 }

@@ -64,7 +64,7 @@ DATA_SRCS = memory.c memory_promote.c memory_context.c memory_scan.c \
 DATA_OBJS = $(DATA_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Layer 2: Agent execution (agent loop, tools, HTTP, policy) ---
-AGENT_SRCS = agent.c agent_policy.c agent_context.c \
+AGENT_SRCS = agent.c agent_protocol.c agent_policy.c agent_context.c \
              agent_plan.c agent_eval.c agent_coord.c agent_jobs.c \
              agent_tools.c agent_http.c agent_tunnel.c
 AGENT_OBJS = $(AGENT_SRCS:%.c=$(OBJDIR)/%.o)

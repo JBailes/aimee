@@ -4,6 +4,7 @@
 #include "dashboard.h"
 #include "agent_config.h"
 #include "agent_exec.h"
+#include "agent_protocol.h"
 #include "agent_tools.h"
 #include "platform_random.h"
 #include "commands.h"
@@ -2324,6 +2325,7 @@ static void handle_request(SSL *ssl, int client_fd)
       for (;;)
       {
          wc_turn_reset(&turn);
+         messages_compact_consecutive(session->messages);
          int http_rc = wc_chat_send(session, &turn);
 
          if (turn.aborted || http_rc < 0)
