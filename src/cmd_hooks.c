@@ -661,64 +661,23 @@ static char *build_session_context(sqlite3 *db)
    return buf;
 }
 
-/* Remove worktrees for a single stale session directory. */
-static void remove_stale_worktrees(const config_t *cfg, const char *wt_dir, const char *sid)
+/* Remove sibling worktrees for a stale session.
+ * Uses worktree_cleanup() which checks each workspace's git root for the
+ * standard .aimee-<project>-<short_session> sibling directory. */
+static void remove_stale_worktrees(const config_t *cfg, const char *sid)
 {
-   char session_wt_dir[MAX_PATH_LEN];
-   snprintf(session_wt_dir, sizeof(session_wt_dir), "%s/%s", wt_dir, sid);
-
-   DIR *sd = opendir(session_wt_dir);
-   if (sd)
+   for (int i = 0; i < cfg->workspace_count; i++)
    {
-      struct dirent *sub;
-      while ((sub = readdir(sd)) != NULL)
-      {
-         if (sub->d_name[0] == '.')
-            continue;
-         char sub_path[MAX_PATH_LEN];
-         snprintf(sub_path, sizeof(sub_path), "%s/%s", session_wt_dir, sub->d_name);
-
-         for (int i = 0; i < cfg->workspace_count; i++)
-         {
-            const char *slash = strrchr(cfg->workspaces[i], '/');
-            const char *ws_name = slash ? slash + 1 : cfg->workspaces[i];
-            if (strcmp(ws_name, sub->d_name) == 0)
-            {
-               char *exec_out = NULL;
-               const char *rm_argv[] = {"git",    "-C",      cfg->workspaces[i], "worktree",
-                                        "remove", "--force", sub_path,           NULL};
-               safe_exec_capture(rm_argv, &exec_out, 1024);
-               free(exec_out);
-
-               char short_id[12];
-               snprintf(short_id, sizeof(short_id), "%.8s", sid);
-               char branch_name[64];
-               snprintf(branch_name, sizeof(branch_name), "aimee/session/%s", short_id);
-               const char *br_argv[] = {"git",       "-C", cfg->workspaces[i], "branch", "-d",
-                                        branch_name, NULL};
-               exec_out = NULL;
-               safe_exec_capture(br_argv, &exec_out, 1024);
-               free(exec_out);
-               break;
-            }
-         }
-      }
-      closedir(sd);
+      char git_root[MAX_PATH_LEN];
+      if (git_repo_root(cfg->workspaces[i], git_root, sizeof(git_root)) == 0)
+         worktree_cleanup(git_root, sid);
    }
-
-   char *exec_out = NULL;
-   const char *rm_argv[] = {"rm", "-rf", session_wt_dir, NULL};
-   safe_exec_capture(rm_argv, &exec_out, 256);
-   free(exec_out);
 }
 
 /* Prune stale sessions: fold their memories, run maintenance, clean up worktrees
  * and state files. This replaces the explicit wrapup command for ended sessions. */
 static void prune_stale_sessions(sqlite3 *db, const config_t *cfg)
 {
-   char wt_dir[MAX_PATH_LEN];
-   snprintf(wt_dir, sizeof(wt_dir), "%s/worktrees", config_output_dir());
-
    const char *config_dir = config_output_dir();
    time_t now = time(NULL);
    int did_maintenance = 0;
@@ -777,37 +736,12 @@ static void prune_stale_sessions(sqlite3 *db, const config_t *cfg)
          }
 
          /* Remove worktrees for this session */
-         remove_stale_worktrees(cfg, wt_dir, stale_sid);
+         remove_stale_worktrees(cfg, stale_sid);
 
          /* Delete the stale state file */
          unlink(state_file);
       }
       closedir(d);
-   }
-
-   /* Also check for orphaned worktree dirs with no state file */
-   const char *current_sid = session_id();
-   DIR *wd = opendir(wt_dir);
-   if (wd)
-   {
-      struct dirent *ent;
-      while ((ent = readdir(wd)) != NULL)
-      {
-         if (ent->d_name[0] == '.')
-            continue;
-         /* Skip our own session — state file may not exist yet during startup */
-         if (strcmp(ent->d_name, current_sid) == 0)
-            continue;
-         char state_file[MAX_PATH_LEN];
-         snprintf(state_file, sizeof(state_file), "%s/session-%s.state", config_dir, ent->d_name);
-         struct stat st;
-         if (stat(state_file, &st) != 0)
-         {
-            /* No state file, remove orphaned worktrees */
-            remove_stale_worktrees(cfg, wt_dir, ent->d_name);
-         }
-      }
-      closedir(wd);
    }
 
    /* Run global maintenance if any sessions were pruned */
@@ -853,7 +787,7 @@ static void prune_stale_sessions(sqlite3 *db, const config_t *cfg)
          {
             const char *exp_sid = (const char *)sqlite3_column_text(exp_stmt, 0);
             if (exp_sid && exp_sid[0])
-               remove_stale_worktrees(cfg, wt_dir, exp_sid);
+               remove_stale_worktrees(cfg, exp_sid);
          }
          sqlite3_finalize(exp_stmt);
       }
