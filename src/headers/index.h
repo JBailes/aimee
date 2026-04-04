@@ -1,0 +1,117 @@
+#ifndef DEC_INDEX_H
+#define DEC_INDEX_H 1
+
+typedef struct
+{
+   char name[128];
+   char root[MAX_PATH_LEN];
+   char scanned_at[32];
+} project_info_t;
+
+typedef struct
+{
+   char path[MAX_PATH_LEN];
+   char purpose[512];
+} file_info_t;
+
+typedef struct
+{
+   char file[MAX_PATH_LEN];
+   char dependents[64][MAX_PATH_LEN];
+   int dependent_count;
+   char dependencies[64][MAX_PATH_LEN];
+   int dependency_count;
+} blast_radius_t;
+
+typedef struct
+{
+   char project[128];
+   char file_path[MAX_PATH_LEN];
+   int line;
+   char kind[32];
+} term_hit_t;
+
+typedef struct
+{
+   char name[128];
+   char kind[32];
+   int line;
+} definition_t;
+
+typedef struct
+{
+   char caller[128];  /* calling function name (empty if at file scope) */
+   char callee[128];  /* called function/method name */
+   int line;
+} call_ref_t;
+
+typedef struct
+{
+   char project[128];
+   char file_path[MAX_PATH_LEN];
+   char caller[128];
+   int line;
+} caller_hit_t;
+
+/* Scan a project directory. If force is non-zero, re-index all files regardless of mtime. */
+int index_scan_project(sqlite3 *db, const char *name, const char *root, int force);
+
+/* Scan a single file. */
+int index_scan_single_file(sqlite3 *db, const char *project, const char *root,
+                           const char *file_path);
+
+/* List all projects. Returns count. */
+int index_list_projects(sqlite3 *db, project_info_t *out, int max);
+
+/* Find an identifier across all projects. Returns count. */
+int index_find(sqlite3 *db, const char *identifier, term_hit_t *out, int max);
+
+/* Get blast radius for a file. */
+int index_blast_radius(sqlite3 *db, const char *project, const char *file_path,
+                       blast_radius_t *out);
+
+/* Blast radius preview for multiple files. Returns JSON (caller frees).
+ * Aggregates blast radii, classifies severity, generates warnings. */
+char *index_blast_radius_preview(sqlite3 *db, const char *project, char **paths, int path_count);
+
+/* Get file structure (definitions). Returns count. */
+int index_structure(sqlite3 *db, const char *project, const char *file_path,
+                    definition_t *out, int max);
+
+/* Check if a file extension has a registered extractor. */
+int index_has_extractor(const char *ext);
+
+/* Extract imports from file content. Returns count. Caller frees each string. */
+int extract_imports(const char *ext, const char *content, char **out, int max);
+
+/* Extract exports from file content. Returns count. Caller frees each string. */
+int extract_exports(const char *ext, const char *content, char **out, int max);
+
+/* Extract route definitions. Returns count. Caller frees each string. */
+int extract_routes(const char *ext, const char *content, char **out, int max);
+
+/* Extract definitions with line numbers. Returns count. */
+int extract_definitions(const char *ext, const char *content, definition_t *out, int max);
+
+/* Extract function calls with caller context and line numbers. Returns count. */
+int extract_calls(const char *ext, const char *content, call_ref_t *out, int max);
+
+/* Find all callers of a given symbol across a project. Returns count. */
+int index_find_callers(sqlite3 *db, const char *project, const char *symbol,
+                       caller_hit_t *out, int max);
+
+/* FTS5 code search result */
+typedef struct
+{
+   char project[128];
+   char file_path[MAX_PATH_LEN];
+   char snippet[512];
+   double rank;
+} code_search_hit_t;
+
+/* Full-text search across indexed code. Returns count of results.
+ * Uses FTS5 BM25 ranking with snippet extraction. */
+int index_code_search(sqlite3 *db, const char *query, const char *project,
+                      code_search_hit_t *out, int max);
+
+#endif /* DEC_INDEX_H */

@@ -1,0 +1,472 @@
+/*
+ * bench_perf.c - Performance benchmark suite for aimee core operations.
+ *
+ * Measures p50/p95/p99 latency for critical paths and optionally compares
+ * against a stored baseline to detect regressions.
+ *
+ * Usage:
+ *   bench-perf                    Run benchmarks, print results
+ *   bench-perf --json             Output results as JSON
+ *   bench-perf --check FILE       Compare against baseline, exit 1 on regression
+ *   bench-perf --save FILE        Save current results as new baseline
+ */
+
+#include <assert.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "aimee.h"
+#include "guardrails.h"
+
+/* --- Timing helpers ---------------------------------------------------- */
+
+static int64_t now_ns(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static int cmp_double(const void *a, const void *b)
+{
+   double da = *(const double *)a;
+   double db = *(const double *)b;
+   if (da < db)
+      return -1;
+   if (da > db)
+      return 1;
+   return 0;
+}
+
+typedef struct
+{
+   double p50_ms;
+   double p95_ms;
+   double p99_ms;
+} percentiles_t;
+
+static void compute_percentiles(double *samples, int n, percentiles_t *out)
+{
+   qsort(samples, (size_t)n, sizeof(double), cmp_double);
+   out->p50_ms = samples[n * 50 / 100];
+   out->p95_ms = samples[n * 95 / 100];
+   out->p99_ms = samples[n * 99 / 100];
+}
+
+/* --- Benchmark definitions --------------------------------------------- */
+
+#define BENCH_ITERATIONS 200
+#define BENCH_WARMUP     10
+
+typedef struct
+{
+   const char *name;
+   double target_p50_ms;
+   double target_p95_ms;
+   double tolerance; /* fraction, e.g. 0.20 = +20% */
+   percentiles_t results;
+} bench_entry_t;
+
+static sqlite3 *bench_db_setup(int memory_count)
+{
+   sqlite3 *db = db_open(":memory:");
+   assert(db != NULL);
+
+   /* Seed memories for search benchmarks */
+   for (int i = 0; i < memory_count; i++)
+   {
+      char key[128], content[256];
+      const char *kinds[] = {KIND_FACT, KIND_PREFERENCE, KIND_DECISION, KIND_EPISODE};
+      const char *tiers[] = {TIER_L0, TIER_L1, TIER_L2};
+      snprintf(key, sizeof(key), "bench_key_%04d", i);
+      snprintf(content, sizeof(content),
+               "Benchmark memory %d: contains information about performance "
+               "testing, latency measurement, and regression detection for "
+               "operation number %d in the system.",
+               i, i);
+      memory_t m;
+      memory_insert(db, tiers[i % 3], kinds[i % 4], key, content, 0.5 + (i % 50) * 0.01, "bench",
+                    &m);
+   }
+
+   return db;
+}
+
+/* Benchmark: db_open + db_close (in-memory) */
+static void bench_db_open(double *samples, int n)
+{
+   for (int i = 0; i < n; i++)
+   {
+      int64_t t0 = now_ns();
+      sqlite3 *db = db_open(":memory:");
+      int64_t t1 = now_ns();
+      db_stmt_cache_clear();
+      db_close(db);
+      samples[i] = (double)(t1 - t0) / 1e6;
+   }
+}
+
+/* Benchmark: memory_find_facts (FTS5 search) */
+static void bench_memory_search(sqlite3 *db, double *samples, int n)
+{
+   const char *queries[] = {"performance", "testing", "latency", "regression",
+                            "measurement", "system",  "bench",   "operation"};
+   int nq = (int)(sizeof(queries) / sizeof(queries[0]));
+
+   for (int i = 0; i < n; i++)
+   {
+      memory_t results[64];
+      int64_t t0 = now_ns();
+      memory_find_facts(db, queries[i % nq], 20, results, 64);
+      int64_t t1 = now_ns();
+      samples[i] = (double)(t1 - t0) / 1e6;
+   }
+}
+
+/* Benchmark: pre_tool_check (Edit, simple path) */
+static void bench_pre_tool_check(sqlite3 *db, double *samples, int n)
+{
+   session_state_t state;
+   memset(&state, 0, sizeof(state));
+   snprintf(state.guardrail_mode, sizeof(state.guardrail_mode), "%s", MODE_APPROVE);
+   char msg[512];
+
+   for (int i = 0; i < n; i++)
+   {
+      int64_t t0 = now_ns();
+      pre_tool_check(db, "Edit", "{\"file_path\":\"/tmp/bench_test.txt\"}", &state, MODE_APPROVE,
+                     "/tmp", msg, sizeof(msg));
+      int64_t t1 = now_ns();
+      samples[i] = (double)(t1 - t0) / 1e6;
+   }
+}
+
+/* Benchmark: memory_insert (single record) */
+static void bench_memory_insert(sqlite3 *db, double *samples, int n)
+{
+   for (int i = 0; i < n; i++)
+   {
+      char key[128];
+      snprintf(key, sizeof(key), "bench_insert_%06d", i + 10000);
+      memory_t m;
+      int64_t t0 = now_ns();
+      memory_insert(db, TIER_L1, KIND_FACT, key, "Benchmark insert content for timing.", 0.75,
+                    "bench", &m);
+      int64_t t1 = now_ns();
+      samples[i] = (double)(t1 - t0) / 1e6;
+   }
+}
+
+/* Benchmark: memory_stats */
+static void bench_memory_stats(sqlite3 *db, double *samples, int n)
+{
+   for (int i = 0; i < n; i++)
+   {
+      memory_stats_t stats;
+      int64_t t0 = now_ns();
+      memory_stats(db, &stats);
+      int64_t t1 = now_ns();
+      samples[i] = (double)(t1 - t0) / 1e6;
+   }
+}
+
+/* Benchmark: memory_promote cycle */
+static void bench_memory_promote(sqlite3 *db, double *samples, int n)
+{
+   for (int i = 0; i < n; i++)
+   {
+      int64_t t0 = now_ns();
+      memory_promote(db);
+      int64_t t1 = now_ns();
+      samples[i] = (double)(t1 - t0) / 1e6;
+   }
+}
+
+/* --- JSON baseline I/O ------------------------------------------------- */
+
+static int parse_baseline(const char *path, bench_entry_t *entries, int count)
+{
+   FILE *f = fopen(path, "r");
+   if (!f)
+      return -1;
+
+   fseek(f, 0, SEEK_END);
+   long len = ftell(f);
+   fseek(f, 0, SEEK_SET);
+   char *buf = malloc((size_t)len + 1);
+   if (!buf)
+   {
+      fclose(f);
+      return -1;
+   }
+   if (fread(buf, 1, (size_t)len, f) != (size_t)len)
+   {
+      free(buf);
+      fclose(f);
+      return -1;
+   }
+   buf[len] = '\0';
+   fclose(f);
+
+   cJSON *root = cJSON_Parse(buf);
+   free(buf);
+   if (!root)
+      return -1;
+
+   cJSON *results = cJSON_GetObjectItemCaseSensitive(root, "results");
+   if (!results)
+   {
+      cJSON_Delete(root);
+      return -1;
+   }
+
+   for (int i = 0; i < count; i++)
+   {
+      /* Convert name to underscore key: "memory_search" from "memory search" */
+      char key[64];
+      snprintf(key, sizeof(key), "%s", entries[i].name);
+      for (char *p = key; *p; p++)
+         if (*p == ' ')
+            *p = '_';
+
+      cJSON *item = cJSON_GetObjectItemCaseSensitive(results, key);
+      if (item)
+      {
+         cJSON *p50 = cJSON_GetObjectItemCaseSensitive(item, "p50_ms");
+         cJSON *p95 = cJSON_GetObjectItemCaseSensitive(item, "p95_ms");
+         cJSON *p99 = cJSON_GetObjectItemCaseSensitive(item, "p99_ms");
+         if (p50)
+            entries[i].results.p50_ms = p50->valuedouble;
+         if (p95)
+            entries[i].results.p95_ms = p95->valuedouble;
+         if (p99)
+            entries[i].results.p99_ms = p99->valuedouble;
+      }
+   }
+
+   cJSON_Delete(root);
+   return 0;
+}
+
+static void save_baseline(const char *path, bench_entry_t *entries, int count)
+{
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddStringToObject(root, "version", AIMEE_VERSION);
+
+   char ts[32];
+   now_utc(ts, sizeof(ts));
+   cJSON_AddStringToObject(root, "timestamp", ts);
+
+   cJSON *results = cJSON_CreateObject();
+   for (int i = 0; i < count; i++)
+   {
+      char key[64];
+      snprintf(key, sizeof(key), "%s", entries[i].name);
+      for (char *p = key; *p; p++)
+         if (*p == ' ')
+            *p = '_';
+
+      cJSON *item = cJSON_CreateObject();
+      cJSON_AddNumberToObject(item, "p50_ms", entries[i].results.p50_ms);
+      cJSON_AddNumberToObject(item, "p95_ms", entries[i].results.p95_ms);
+      cJSON_AddNumberToObject(item, "p99_ms", entries[i].results.p99_ms);
+      cJSON_AddNumberToObject(item, "target_p50_ms", entries[i].target_p50_ms);
+      cJSON_AddNumberToObject(item, "target_p95_ms", entries[i].target_p95_ms);
+      cJSON_AddNumberToObject(item, "tolerance", entries[i].tolerance);
+      cJSON_AddItemToObject(results, key, item);
+   }
+   cJSON_AddItemToObject(root, "results", results);
+
+   char *json = cJSON_Print(root);
+   cJSON_Delete(root);
+
+   FILE *f = fopen(path, "w");
+   if (f)
+   {
+      fputs(json, f);
+      fputc('\n', f);
+      fclose(f);
+   }
+   free(json);
+}
+
+/* --- Regression checking ----------------------------------------------- */
+
+static int check_regression(bench_entry_t *current, bench_entry_t *baseline, int count)
+{
+   int failures = 0;
+
+   printf("\n%-20s  %10s  %10s  %10s  %s\n", "Operation", "Current", "Baseline", "Tolerance",
+          "Status");
+   printf("%-20s  %10s  %10s  %10s  %s\n", "--------------------", "----------", "----------",
+          "----------", "------");
+
+   for (int i = 0; i < count; i++)
+   {
+      if (baseline[i].results.p95_ms <= 0)
+      {
+         printf("%-20s  %8.2fms  %10s  %9.0f%%  SKIP (no baseline)\n", current[i].name,
+                current[i].results.p95_ms, "n/a", current[i].tolerance * 100);
+         continue;
+      }
+
+      double threshold = baseline[i].results.p95_ms * (1.0 + current[i].tolerance);
+      int pass = current[i].results.p95_ms <= threshold;
+
+      printf("%-20s  %8.2fms  %8.2fms  %9.0f%%  %s\n", current[i].name, current[i].results.p95_ms,
+             baseline[i].results.p95_ms, current[i].tolerance * 100, pass ? "PASS" : "FAIL");
+
+      if (!pass)
+         failures++;
+   }
+
+   return failures;
+}
+
+/* --- JSON output ------------------------------------------------------- */
+
+static void print_json(bench_entry_t *entries, int count)
+{
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddStringToObject(root, "version", AIMEE_VERSION);
+
+   char ts[32];
+   now_utc(ts, sizeof(ts));
+   cJSON_AddStringToObject(root, "timestamp", ts);
+
+   cJSON *results = cJSON_CreateArray();
+   for (int i = 0; i < count; i++)
+   {
+      cJSON *item = cJSON_CreateObject();
+      cJSON_AddStringToObject(item, "name", entries[i].name);
+      cJSON_AddNumberToObject(item, "p50_ms", entries[i].results.p50_ms);
+      cJSON_AddNumberToObject(item, "p95_ms", entries[i].results.p95_ms);
+      cJSON_AddNumberToObject(item, "p99_ms", entries[i].results.p99_ms);
+      cJSON_AddNumberToObject(item, "target_p50_ms", entries[i].target_p50_ms);
+      cJSON_AddNumberToObject(item, "target_p95_ms", entries[i].target_p95_ms);
+      cJSON_AddNumberToObject(item, "tolerance", entries[i].tolerance);
+      cJSON_AddItemToArray(results, item);
+   }
+   cJSON_AddItemToObject(root, "results", results);
+
+   char *json = cJSON_Print(root);
+   printf("%s\n", json);
+   free(json);
+   cJSON_Delete(root);
+}
+
+/* --- Main -------------------------------------------------------------- */
+
+int main(int argc, char **argv)
+{
+   int json_mode = 0;
+   const char *check_path = NULL;
+   const char *save_path = NULL;
+
+   for (int i = 1; i < argc; i++)
+   {
+      if (strcmp(argv[i], "--json") == 0)
+         json_mode = 1;
+      else if (strcmp(argv[i], "--check") == 0 && i + 1 < argc)
+         check_path = argv[++i];
+      else if (strcmp(argv[i], "--save") == 0 && i + 1 < argc)
+         save_path = argv[++i];
+   }
+
+   /* Define benchmarks with SLO targets */
+   bench_entry_t benchmarks[] = {
+       {"db_open", 20.0, 50.0, 0.20, {0, 0, 0}},
+       {"memory_search", 5.0, 20.0, 0.30, {0, 0, 0}},
+       {"pre_tool_check", 1.0, 3.0, 0.50, {0, 0, 0}},
+       {"memory_insert", 1.0, 5.0, 0.30, {0, 0, 0}},
+       {"memory_stats", 1.0, 3.0, 0.30, {0, 0, 0}},
+       {"memory_promote", 5.0, 15.0, 0.30, {0, 0, 0}},
+   };
+   int bench_count = (int)(sizeof(benchmarks) / sizeof(benchmarks[0]));
+
+   /* Allocate sample arrays */
+   int total = BENCH_WARMUP + BENCH_ITERATIONS;
+   double *samples = calloc((size_t)total, sizeof(double));
+   assert(samples);
+
+   /* Setup shared database with 1000 memories */
+   sqlite3 *db = bench_db_setup(1000);
+
+   /* Run each benchmark */
+   for (int b = 0; b < bench_count; b++)
+   {
+      memset(samples, 0, (size_t)total * sizeof(double));
+
+      if (strcmp(benchmarks[b].name, "db_open") == 0)
+         bench_db_open(samples, total);
+      else if (strcmp(benchmarks[b].name, "memory_search") == 0)
+         bench_memory_search(db, samples, total);
+      else if (strcmp(benchmarks[b].name, "pre_tool_check") == 0)
+         bench_pre_tool_check(db, samples, total);
+      else if (strcmp(benchmarks[b].name, "memory_insert") == 0)
+         bench_memory_insert(db, samples, total);
+      else if (strcmp(benchmarks[b].name, "memory_stats") == 0)
+         bench_memory_stats(db, samples, total);
+      else if (strcmp(benchmarks[b].name, "memory_promote") == 0)
+         bench_memory_promote(db, samples, total);
+
+      /* Discard warmup, compute percentiles on remaining samples */
+      compute_percentiles(samples + BENCH_WARMUP, BENCH_ITERATIONS, &benchmarks[b].results);
+   }
+
+   db_stmt_cache_clear();
+   db_close(db);
+   free(samples);
+
+   /* Output results */
+   if (json_mode)
+   {
+      print_json(benchmarks, bench_count);
+   }
+   else if (!check_path)
+   {
+      printf("%-20s  %10s  %10s  %10s\n", "Operation", "p50", "p95", "p99");
+      printf("%-20s  %10s  %10s  %10s\n", "--------------------", "----------", "----------",
+             "----------");
+      for (int i = 0; i < bench_count; i++)
+      {
+         printf("%-20s  %8.2fms  %8.2fms  %8.2fms\n", benchmarks[i].name,
+                benchmarks[i].results.p50_ms, benchmarks[i].results.p95_ms,
+                benchmarks[i].results.p99_ms);
+      }
+   }
+
+   /* Save baseline if requested */
+   if (save_path)
+   {
+      save_baseline(save_path, benchmarks, bench_count);
+      if (!json_mode)
+         printf("\nBaseline saved to %s\n", save_path);
+   }
+
+   /* Regression check */
+   if (check_path)
+   {
+      bench_entry_t baseline[6];
+      memcpy(baseline, benchmarks, sizeof(baseline));
+
+      if (parse_baseline(check_path, baseline, bench_count) != 0)
+      {
+         fprintf(stderr, "Error: could not read baseline from %s\n", check_path);
+         return 1;
+      }
+
+      int failures = check_regression(benchmarks, baseline, bench_count);
+      if (failures > 0)
+      {
+         printf("\n%d benchmark(s) regressed beyond tolerance.\n", failures);
+         return 1;
+      }
+      printf("\nAll benchmarks within tolerance.\n");
+   }
+
+   return 0;
+}

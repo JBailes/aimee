@@ -1,0 +1,17 @@
+[Unit]
+Description=Aimee Webchat Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=/root
+ExecStart=/usr/local/bin/aimee webchat --port 8080
+WorkingDirectory=/root/aimee
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

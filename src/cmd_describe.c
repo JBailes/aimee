@@ -1,0 +1,794 @@
+/* cmd_describe.c: auto-describe projects via agent delegation */
+#include "aimee.h"
+#include "commands.h"
+#include "workspace.h"
+#include "agent.h"
+#include "cJSON.h"
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <time.h>
+
+#define DESCRIBE_MAX_PARALLEL_FALLBACK 3
+#define DESCRIBE_MAX_PARALLEL_CAP      8
+
+/* --- description file paths --- */
+
+static void describe_dir(char *buf, size_t len)
+{
+   snprintf(buf, len, "%s/projects", config_default_dir());
+}
+
+static void describe_path(const char *project_name, char *buf, size_t len)
+{
+   snprintf(buf, len, "%s/projects/%s.md", config_default_dir(), project_name);
+}
+
+/* --- read existing description --- */
+
+char *describe_read(const char *project_name)
+{
+   char path[MAX_PATH_LEN];
+   describe_path(project_name, path, sizeof(path));
+
+   FILE *f = fopen(path, "r");
+   if (!f)
+      return NULL;
+
+   fseek(f, 0, SEEK_END);
+   long sz = ftell(f);
+   fseek(f, 0, SEEK_SET);
+
+   if (sz <= 0 || sz > MAX_FILE_SIZE)
+   {
+      fclose(f);
+      return NULL;
+   }
+
+   char *buf = malloc((size_t)sz + 1);
+   if (!buf)
+   {
+      fclose(f);
+      return NULL;
+   }
+
+   size_t n = fread(buf, 1, (size_t)sz, f);
+   buf[n] = '\0';
+   fclose(f);
+   return buf;
+}
+
+/* --- extract commit from frontmatter --- */
+
+static int extract_commit(const char *content, char *out, size_t out_len)
+{
+   const char *p = strstr(content, "commit: ");
+   if (!p)
+      return -1;
+   p += 8;
+   const char *end = strchr(p, '\n');
+   if (!end)
+      return -1;
+   size_t len = (size_t)(end - p);
+   if (len >= out_len)
+      len = out_len - 1;
+   memcpy(out, p, len);
+   out[len] = '\0';
+   return 0;
+}
+
+/* --- get HEAD commit for a project --- */
+
+static int get_head_commit(const char *project_path, char *out, size_t out_len)
+{
+   const char *argv[] = {"git", "-C", project_path, "rev-parse", "--short", "HEAD", NULL};
+   char *result = NULL;
+   int rc = safe_exec_capture(argv, &result, 256);
+   if (rc != 0 || !result)
+   {
+      free(result);
+      return -1;
+   }
+   /* strip trailing newline */
+   size_t len = strlen(result);
+   while (len > 0 && (result[len - 1] == '\n' || result[len - 1] == '\r'))
+      result[--len] = '\0';
+   snprintf(out, out_len, "%s", result);
+   free(result);
+   return 0;
+}
+
+/* --- check if project has structural changes since last describe --- */
+
+static int has_structural_changes(const char *project_path, const char *old_commit)
+{
+   /* diff --name-only between old commit and HEAD, filter for structural files */
+   char range[128];
+   snprintf(range, sizeof(range), "%s..HEAD", old_commit);
+
+   const char *argv[] = {"git", "-C", project_path, "diff", "--name-only", range, NULL};
+   char *result = NULL;
+   int rc = safe_exec_capture(argv, &result, 8192);
+   if (rc != 0 || !result)
+   {
+      free(result);
+      return 1; /* assume changes if we can't check */
+   }
+
+   if (!result[0])
+   {
+      free(result);
+      return 0; /* no changes at all */
+   }
+
+   /* Check for structural changes: new/deleted files at top level,
+    * build files, config files, new directories */
+   int structural = 0;
+   char *line = result;
+   while (line && *line)
+   {
+      char *nl = strchr(line, '\n');
+      if (nl)
+         *nl = '\0';
+
+      /* Top-level new files (no directory separator before first component) */
+      const char *slash = strchr(line, '/');
+
+      /* Build/config files anywhere */
+      const char *base = slash ? strrchr(line, '/') + 1 : line;
+      if (strcmp(base, "Makefile") == 0 || strcmp(base, "CMakeLists.txt") == 0 ||
+          strcmp(base, "package.json") == 0 || strcmp(base, "Cargo.toml") == 0 ||
+          strcmp(base, "go.mod") == 0 || strcmp(base, "pyproject.toml") == 0 ||
+          strcmp(base, "setup.py") == 0 || strcmp(base, "README.md") == 0 ||
+          strstr(base, ".csproj") || strstr(base, ".sln"))
+      {
+         structural = 1;
+         break;
+      }
+
+      /* New top-level directory (file path has exactly one slash at a shallow level) */
+      if (slash && !strchr(slash + 1, '/'))
+      {
+         /* A new file directly under the project root - could indicate new module */
+      }
+
+      /* Header files (new APIs/modules) */
+      size_t linelen = strlen(line);
+      if (linelen > 2 && strcmp(line + linelen - 2, ".h") == 0)
+      {
+         structural = 1;
+         break;
+      }
+
+      line = nl ? nl + 1 : NULL;
+   }
+
+   free(result);
+   return structural;
+}
+
+/* --- check if project needs describing (returns 1 if work needed) --- */
+
+static int needs_describe(const char *project_name, const char *project_path, int force)
+{
+   if (force)
+      return 1;
+
+   char *existing = describe_read(project_name);
+   if (!existing)
+      return 1;
+
+   char old_commit[64] = {0};
+   char head_commit[64] = {0};
+
+   if (extract_commit(existing, old_commit, sizeof(old_commit)) == 0 &&
+       get_head_commit(project_path, head_commit, sizeof(head_commit)) == 0)
+   {
+      if (strcmp(old_commit, head_commit) == 0)
+      {
+         fprintf(stderr, "describe: %s is up to date (%s)\n", project_name, head_commit);
+         free(existing);
+         return 0;
+      }
+
+      if (!has_structural_changes(project_path, old_commit))
+      {
+         fprintf(stderr, "describe: %s has no structural changes since %s, skipping\n",
+                 project_name, old_commit);
+         free(existing);
+         return 0;
+      }
+   }
+
+   free(existing);
+   return 1;
+}
+
+/* --- describe prompt --- */
+
+static const char *describe_system_prompt =
+    "You are a code analyst. Your job is to produce a structured project description "
+    "that gives other AI agents everything they need to navigate and work in a project "
+    "without searching or exploring.\n\n"
+    "Be thorough but concise. Only describe what exists in the code today. "
+    "Do not speculate about future plans or aspirational features.\n"
+    "Do not wrap your output in markdown code fences.\n\n"
+    "IMPORTANT: Only describe files and directories that are tracked by git. "
+    "Run `git ls-files` or `git ls-tree -r --name-only HEAD` to see what is tracked. "
+    "Do NOT describe build output, binaries, .gitignored files, or untracked directories. "
+    "If a directory only contains .gitignored content, omit it entirely.";
+
+static const char *describe_user_template =
+    "Analyze the project at %s and produce a structured description.\n\n"
+    "Use the tools to:\n"
+    "1. List the directory structure (top level and one level down in key dirs)\n"
+    "2. Read build files (Makefile, package.json, Cargo.toml, etc.)\n"
+    "3. Read entry point files to understand what the program does\n"
+    "4. Read key source files to understand architecture\n\n"
+    "Output the description in EXACTLY this format (no code fences):\n\n"
+    "---\n"
+    "project: %s\n"
+    "generated: YYYY-MM-DDTHH:MM:SSZ\n"
+    "commit: %s\n"
+    "---\n\n"
+    "# %s\n\n"
+    "<2-3 sentence summary of what this project is and does>\n\n"
+    "Type: <cli|server|library|webapp|game|infrastructure|tool|other>\n"
+    "Language: <primary language(s)>\n"
+    "Build: <exact build command>\n"
+    "Test: <exact test command, or \"none\" if no tests>\n"
+    "Lint: <exact lint command, or \"none\">\n\n"
+    "## Entry Points\n"
+    "- <file:function()> -- <what it does>\n\n"
+    "## Directory Layout\n"
+    "- <dir/> -- <purpose>\n\n"
+    "## Key Files\n"
+    "- <file> -- <one-line role>\n\n"
+    "## Architecture\n"
+    "<How the major components connect. What calls what. Data flow.\n"
+    "Keep to 1-2 short paragraphs.>\n\n"
+    "## Conventions\n"
+    "<Naming patterns, code style, patterns used. 2-4 bullet points.>";
+
+/* --- describe a single project (runs in child process) --- */
+
+static int describe_one(const char *project_name, const char *project_path)
+{
+   /* Get HEAD commit */
+   char head[64] = {0};
+   if (get_head_commit(project_path, head, sizeof(head)) != 0)
+      snprintf(head, sizeof(head), "unknown");
+
+   /* Build the prompt */
+   size_t prompt_len = strlen(describe_user_template) + MAX_PATH_LEN + 256;
+   char *prompt = malloc(prompt_len);
+   if (!prompt)
+      return -1;
+   snprintf(prompt, prompt_len, describe_user_template, project_path, project_name, head,
+            project_name);
+
+   fprintf(stderr, "describe: analyzing %s at %s...\n", project_name, head);
+
+   /* Open own database and agent config (child process, fresh handles) */
+   sqlite3 *db = db_open(NULL);
+   if (!db)
+   {
+      free(prompt);
+      return -1;
+   }
+
+   agent_config_t cfg;
+   if (agent_load_config(&cfg) != 0 || cfg.agent_count == 0)
+   {
+      free(prompt);
+      sqlite3_close(db);
+      return -1;
+   }
+
+   /* Delegate to an agent with tools */
+   agent_http_init();
+
+   agent_result_t result;
+   memset(&result, 0, sizeof(result));
+
+   int rc =
+       agent_run_with_tools(db, &cfg, "execute", describe_system_prompt, prompt, 4096, &result);
+
+   free(prompt);
+
+   if (rc != 0 || !result.response || !result.response[0])
+   {
+      fprintf(stderr, "describe: failed for %s: %s\n", project_name,
+              result.error[0] ? result.error : "no response");
+      agent_http_cleanup();
+      free(result.response);
+      sqlite3_close(db);
+      return -1;
+   }
+
+   /* Ensure projects directory exists */
+   char dir[MAX_PATH_LEN];
+   describe_dir(dir, sizeof(dir));
+   mkdir(dir, 0755);
+
+   /* Write description file */
+   char path[MAX_PATH_LEN];
+   describe_path(project_name, path, sizeof(path));
+
+   FILE *f = fopen(path, "w");
+   if (!f)
+   {
+      fprintf(stderr, "describe: cannot write %s: %s\n", path, strerror(errno));
+      free(result.response);
+      agent_http_cleanup();
+      sqlite3_close(db);
+      return -1;
+   }
+
+   fprintf(f, "%s\n", result.response);
+   fclose(f);
+
+   fprintf(stderr, "describe: wrote %s (%d turns, %d tool calls)\n", path, result.turns,
+           result.tool_calls);
+
+   free(result.response);
+   agent_http_cleanup();
+   sqlite3_close(db);
+   return 0;
+}
+
+/* --- style analysis --- */
+
+static void style_path(const char *project_name, char *buf, size_t len)
+{
+   snprintf(buf, len, "%s/projects/%s.style.md", config_default_dir(), project_name);
+}
+
+static int needs_style(const char *project_name, const char *project_path, int force)
+{
+   if (force)
+      return 1;
+
+   char *existing = style_read(project_name);
+   if (!existing)
+      return 1;
+
+   char old_commit[64] = {0};
+   char head_commit[64] = {0};
+
+   if (extract_commit(existing, old_commit, sizeof(old_commit)) == 0 &&
+       get_head_commit(project_path, head_commit, sizeof(head_commit)) == 0)
+   {
+      if (strcmp(old_commit, head_commit) == 0)
+      {
+         fprintf(stderr, "style: %s is up to date (%s)\n", project_name, head_commit);
+         free(existing);
+         return 0;
+      }
+
+      if (!has_structural_changes(project_path, old_commit))
+      {
+         fprintf(stderr, "style: %s has no structural changes since %s, skipping\n", project_name,
+                 old_commit);
+         free(existing);
+         return 0;
+      }
+   }
+
+   free(existing);
+   return 1;
+}
+
+static const char *style_system_prompt =
+    "You are a code style analyst. Your job is to analyze a project's source code "
+    "and produce a structured coding style guide that other AI agents can follow "
+    "when writing code in this project.\n\n"
+    "Be precise and concrete. Report what the code actually does, not opinions. "
+    "Only analyze files tracked by git. "
+    "Do not wrap your output in markdown code fences.";
+
+static const char *style_user_template =
+    "Analyze the coding style of the project at %s.\n\n"
+    "Use the tools to:\n"
+    "1. Run `git -C %s ls-files` to see tracked source files\n"
+    "2. Read 5-8 representative source files (entry points, core modules, utilities, tests)\n"
+    "3. Identify concrete coding conventions\n\n"
+    "Output the style guide in EXACTLY this format (no code fences):\n\n"
+    "---\n"
+    "project: %s\n"
+    "commit: %s\n"
+    "---\n\n"
+    "# Style Guide: %s\n\n"
+    "## Indentation\n"
+    "- <tabs or spaces>, <width> per level\n\n"
+    "## Naming Conventions\n"
+    "- Functions: <snake_case|camelCase|PascalCase>\n"
+    "- Variables: <convention>\n"
+    "- Types/Structs: <convention>\n"
+    "- Constants/Macros: <convention>\n"
+    "- Files: <convention>\n\n"
+    "## Braces & Formatting\n"
+    "- Brace style: <K&R|Allman|same-line|other>\n"
+    "- Max line length: ~<N> characters\n"
+    "- Blank lines between functions: <yes|no>\n\n"
+    "## Strings & Literals\n"
+    "- Quote style: <single|double|N/A>\n"
+    "- Semicolons: <always|never|N/A>\n\n"
+    "## Imports / Includes\n"
+    "- Order: <description of ordering convention>\n"
+    "- Style: <description>\n\n"
+    "## Error Handling\n"
+    "- Pattern: <return codes|exceptions|Result type|other>\n"
+    "- <additional details>\n\n"
+    "## Comments\n"
+    "- Style: <// preferred|/* */ preferred|doc comments|other>\n"
+    "- When used: <description>\n\n"
+    "## Patterns\n"
+    "- <2-4 bullet points on recurring code patterns: guard clauses, early returns, etc.>";
+
+static int style_one(const char *project_name, const char *project_path)
+{
+   char head[64] = {0};
+   if (get_head_commit(project_path, head, sizeof(head)) != 0)
+      snprintf(head, sizeof(head), "unknown");
+
+   /* Build the prompt (5 format args: path, path, name, head, name) */
+   size_t prompt_len = strlen(style_user_template) + MAX_PATH_LEN * 2 + 512;
+   char *prompt = malloc(prompt_len);
+   if (!prompt)
+      return -1;
+   snprintf(prompt, prompt_len, style_user_template, project_path, project_path, project_name, head,
+            project_name);
+
+   fprintf(stderr, "style: analyzing %s at %s...\n", project_name, head);
+
+   sqlite3 *db = db_open(NULL);
+   if (!db)
+   {
+      free(prompt);
+      return -1;
+   }
+
+   agent_config_t cfg;
+   if (agent_load_config(&cfg) != 0 || cfg.agent_count == 0)
+   {
+      free(prompt);
+      sqlite3_close(db);
+      return -1;
+   }
+
+   agent_http_init();
+
+   agent_result_t result;
+   memset(&result, 0, sizeof(result));
+
+   int rc = agent_run_with_tools(db, &cfg, "execute", style_system_prompt, prompt, 4096, &result);
+
+   free(prompt);
+
+   if (rc != 0 || !result.response || !result.response[0])
+   {
+      fprintf(stderr, "style: failed for %s: %s\n", project_name,
+              result.error[0] ? result.error : "no response");
+      agent_http_cleanup();
+      free(result.response);
+      sqlite3_close(db);
+      return -1;
+   }
+
+   /* Ensure projects directory exists */
+   char dir[MAX_PATH_LEN];
+   describe_dir(dir, sizeof(dir));
+   mkdir(dir, 0755);
+
+   /* Write style file */
+   char path[MAX_PATH_LEN];
+   style_path(project_name, path, sizeof(path));
+
+   FILE *f = fopen(path, "w");
+   if (!f)
+   {
+      fprintf(stderr, "style: cannot write %s: %s\n", path, strerror(errno));
+      free(result.response);
+      agent_http_cleanup();
+      sqlite3_close(db);
+      return -1;
+   }
+
+   fprintf(f, "%s\n", result.response);
+   fclose(f);
+
+   fprintf(stderr, "style: wrote %s (%d turns, %d tool calls)\n", path, result.turns,
+           result.tool_calls);
+
+   free(result.response);
+   agent_http_cleanup();
+   sqlite3_close(db);
+   return 0;
+}
+
+/* --- parallel execution with concurrency cap --- */
+
+typedef struct
+{
+   char name[128];
+   char path[MAX_PATH_LEN];
+} describe_job_t;
+
+/* Wait for one child to finish. Returns its exit status, sets *finished_name
+ * to the name of the project via the pids/names arrays. Returns -1 on error. */
+static int reap_one(pid_t *pids, describe_job_t *jobs, int active, int *finished_idx)
+{
+   int status = 0;
+   pid_t done = waitpid(-1, &status, 0);
+   if (done <= 0)
+      return -1;
+
+   for (int i = 0; i < active; i++)
+   {
+      if (pids[i] == done)
+      {
+         *finished_idx = i;
+         return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+      }
+   }
+   *finished_idx = -1;
+   return -1;
+}
+
+/* --- cmd_describe --- */
+
+void cmd_describe(app_ctx_t *ctx, int argc, char **argv)
+{
+   static const char *bool_flags[] = {"force", "style", "all", NULL};
+   opt_parsed_t opts;
+   opt_parse(argc, argv, bool_flags, &opts);
+
+   int force = opt_has(&opts, "force");
+   int do_style = opt_has(&opts, "style");
+   int do_all = opt_has(&opts, "all");
+   int retry_count = opt_get_int(&opts, "retry", 0);
+   const char *target = opt_pos(&opts, 0);
+
+   /* Get indexed projects from DB */
+   sqlite3 *desc_db = db_open(NULL);
+   if (!desc_db)
+      fatal("cannot open database");
+
+   project_info_t all_projects[256];
+   int pcount = index_list_projects(desc_db, all_projects, 256);
+   db_stmt_cache_clear();
+   db_close(desc_db);
+
+   if (pcount == 0)
+      fatal("no indexed projects found. Run 'aimee workspace add <path>' first.");
+
+   /* Collect jobs that need work */
+   describe_job_t jobs[256];
+   memset(jobs, 0, sizeof(jobs));
+   int job_count = 0;
+
+   for (int i = 0; i < pcount; i++)
+   {
+      if (target && strcmp(target, all_projects[i].name) != 0)
+         continue;
+
+      struct stat st;
+      if (stat(all_projects[i].root, &st) != 0 || !S_ISDIR(st.st_mode))
+      {
+         fprintf(stderr, "describe: %s not found at %s, skipping\n", all_projects[i].name,
+                 all_projects[i].root);
+         continue;
+      }
+
+      if (do_style)
+      {
+         if (!needs_style(all_projects[i].name, all_projects[i].root, force))
+            continue;
+      }
+      else
+      {
+         if (!needs_describe(all_projects[i].name, all_projects[i].root, force))
+            continue;
+      }
+
+      snprintf(jobs[job_count].name, sizeof(jobs[job_count].name), "%s", all_projects[i].name);
+      snprintf(jobs[job_count].path, sizeof(jobs[job_count].path), "%s", all_projects[i].root);
+      job_count++;
+   }
+
+   if (target && job_count == 0)
+   {
+      /* Check if project exists at all (might have been skipped as up-to-date) */
+      int found = 0;
+      for (int i = 0; i < pcount; i++)
+      {
+         if (strcmp(all_projects[i].name, target) == 0)
+         {
+            found = 1;
+            break;
+         }
+      }
+      if (!found)
+         fatal("project '%s' not found in index", target);
+      /* Otherwise it was up to date */
+      if (ctx->json_output)
+      {
+         cJSON *obj = cJSON_CreateObject();
+         cJSON_AddNumberToObject(obj, "described", 0);
+         cJSON_AddNumberToObject(obj, "failed", 0);
+         emit_json_ctx(obj, ctx->json_fields, ctx->response_profile);
+      }
+      return;
+   }
+
+   if (job_count == 0)
+   {
+      fprintf(stderr, "describe: all projects up to date\n");
+      if (ctx->json_output)
+      {
+         cJSON *obj = cJSON_CreateObject();
+         cJSON_AddNumberToObject(obj, "described", 0);
+         cJSON_AddNumberToObject(obj, "failed", 0);
+         emit_json_ctx(obj, ctx->json_fields, ctx->response_profile);
+      }
+      return;
+   }
+
+   /* Close parent's DB before forking (children open their own) */
+   /* We haven't opened one yet in this path, so nothing to close */
+
+   /* Ensure projects directory exists before forking */
+   char dir[MAX_PATH_LEN];
+   describe_dir(dir, sizeof(dir));
+   mkdir(dir, 0755);
+
+   int described = 0;
+   int failed = 0;
+   int attempts = retry_count + 1;
+
+   for (int attempt = 0; attempt < attempts; attempt++)
+   {
+      if (attempt > 0)
+      {
+         /* Rebuild job list with only failed projects */
+         describe_job_t retry_jobs[256];
+         int retry_count_actual = 0;
+
+         for (int i = 0; i < job_count; i++)
+         {
+            /* Check if description file now exists (succeeded on prior attempt) */
+            char *existing = describe_read(jobs[i].name);
+            if (existing)
+            {
+               free(existing);
+               continue;
+            }
+            retry_jobs[retry_count_actual++] = jobs[i];
+         }
+
+         if (retry_count_actual == 0)
+            break;
+
+         memcpy(jobs, retry_jobs, sizeof(describe_job_t) * (size_t)retry_count_actual);
+         job_count = retry_count_actual;
+         failed = 0; /* reset for this attempt */
+
+         fprintf(stderr, "describe: retry %d/%d (%d projects remaining)...\n", attempt,
+                 attempts - 1, job_count);
+      }
+
+      /* Determine per-agent parallelism cap */
+      int max_parallel = DESCRIBE_MAX_PARALLEL_FALLBACK;
+      {
+         agent_config_t cfg;
+         if (agent_load_config(&cfg) == 0)
+         {
+            agent_t *ag = agent_route(&cfg, "execute");
+            if (ag && ag->max_parallel > 0)
+               max_parallel = ag->max_parallel;
+         }
+         if (max_parallel > DESCRIBE_MAX_PARALLEL_CAP)
+            max_parallel = DESCRIBE_MAX_PARALLEL_CAP;
+      }
+
+      /* Fork up to max_parallel children at a time */
+      pid_t active_pids[DESCRIBE_MAX_PARALLEL_CAP];
+      int active_jobs[DESCRIBE_MAX_PARALLEL_CAP]; /* index into jobs[] */
+      int active = 0;
+      int next_job = 0;
+
+      while (next_job < job_count || active > 0)
+      {
+         /* Launch children up to the concurrency cap */
+         while (active < max_parallel && next_job < job_count)
+         {
+            pid_t pid = fork();
+            if (pid < 0)
+            {
+               fprintf(stderr, "describe: fork failed: %s\n", strerror(errno));
+               failed++;
+               next_job++;
+               continue;
+            }
+
+            if (pid == 0)
+            {
+               /* Child: describe or style-analyze one project and exit */
+               int rc;
+               if (do_style)
+                  rc = style_one(jobs[next_job].name, jobs[next_job].path);
+               else
+                  rc = describe_one(jobs[next_job].name, jobs[next_job].path);
+               _exit(rc == 0 ? 0 : 1);
+            }
+
+            /* Parent: track the child */
+            active_pids[active] = pid;
+            active_jobs[active] = next_job;
+            active++;
+            next_job++;
+         }
+
+         /* Wait for one child to finish */
+         if (active > 0)
+         {
+            int finished_idx = -1;
+            int exit_status = reap_one(active_pids, jobs, active, &finished_idx);
+
+            if (finished_idx >= 0)
+            {
+               int job_idx = active_jobs[finished_idx];
+               if (exit_status == 0)
+               {
+                  described++;
+               }
+               else
+               {
+                  /* Only count as failed on last attempt */
+                  if (attempt == attempts - 1)
+                     failed++;
+               }
+
+               (void)job_idx;
+
+               /* Remove from active list by shifting */
+               for (int i = finished_idx; i < active - 1; i++)
+               {
+                  active_pids[i] = active_pids[i + 1];
+                  active_jobs[i] = active_jobs[i + 1];
+               }
+               active--;
+            }
+         }
+      }
+   }
+
+   if (ctx->json_output)
+   {
+      cJSON *obj = cJSON_CreateObject();
+      cJSON_AddNumberToObject(obj, "described", described);
+      cJSON_AddNumberToObject(obj, "failed", failed);
+      emit_json_ctx(obj, ctx->json_fields, ctx->response_profile);
+   }
+   else
+   {
+      const char *label = do_style ? "style" : "describe";
+      fprintf(stderr, "%s: %d completed, %d failed\n", label, described, failed);
+   }
+
+   /* If --all, run style analysis as a second pass */
+   if (do_all && !do_style)
+   {
+      /* Build argv for recursive call with --style */
+      int new_argc = 0;
+      char *new_argv[16];
+      new_argv[new_argc++] = "--style";
+      if (force)
+         new_argv[new_argc++] = "--force";
+      if (target)
+         new_argv[new_argc++] = (char *)target;
+      cmd_describe(ctx, new_argc, new_argv);
+   }
+}

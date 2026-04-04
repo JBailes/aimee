@@ -1,0 +1,54 @@
+{
+	"version":	"0.2.0",
+	"timestamp":	"2026-04-02T09:50:40Z",
+	"results":	{
+		"db_open":	{
+			"p50_ms":	3.843657,
+			"p95_ms":	4.82676,
+			"p99_ms":	5.902979,
+			"target_p50_ms":	20,
+			"target_p95_ms":	50,
+			"tolerance":	0.2
+		},
+		"memory_search":	{
+			"p50_ms":	0.172085,
+			"p95_ms":	0.185127,
+			"p99_ms":	0.269572,
+			"target_p50_ms":	5,
+			"target_p95_ms":	20,
+			"tolerance":	0.3
+		},
+		"pre_tool_check":	{
+			"p50_ms":	0.007725,
+			"p95_ms":	0.008414,
+			"p99_ms":	0.01064,
+			"target_p50_ms":	1,
+			"target_p95_ms":	3,
+			"tolerance":	0.5
+		},
+		"memory_insert":	{
+			"p50_ms":	0.044047,
+			"p95_ms":	0.085374,
+			"p99_ms":	0.101472,
+			"target_p50_ms":	1,
+			"target_p95_ms":	5,
+			"tolerance":	0.3
+		},
+		"memory_stats":	{
+			"p50_ms":	0.065071,
+			"p95_ms":	0.09207,
+			"p99_ms":	0.094879,
+			"target_p50_ms":	1,
+			"target_p95_ms":	3,
+			"tolerance":	0.3
+		},
+		"memory_promote":	{
+			"p50_ms":	0.210256,
+			"p95_ms":	0.319707,
+			"p99_ms":	0.336115,
+			"target_p50_ms":	5,
+			"target_p95_ms":	15,
+			"tolerance":	0.3
+		}
+	}
+}

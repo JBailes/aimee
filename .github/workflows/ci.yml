@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'aimee.workspace.yaml'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'aimee.workspace.yaml'
+
+jobs:
+  # Fast checks that don't need a full build
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make clang-format \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Check formatting
+        run: cd src && make lint
+      - name: Build integrity
+        run: cd src && make build-integrity
+
+  # Build, verify, and upload binaries for downstream jobs
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Build all binaries
+        run: cd src && make -j$(nproc) all server
+      - name: Verify binaries
+        run: |
+          ls -lh aimee aimee-server
+          ./aimee version
+          ./aimee-server --version
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            aimee
+            aimee-server
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Build and run unit tests
+        run: cd src && make -j$(nproc) unit-tests
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make cppcheck \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Run CPPCheck
+        run: cd src && make cppcheck STATIC_ANALYSIS_STRICT=1
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make lcov bc \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Generate coverage report
+        run: cd src && make -j$(nproc) coverage
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Run AddressSanitizer + UndefinedBehaviorSanitizer
+        run: |
+          cd src && make -j$(nproc) unit-tests \
+            EXTRA_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            EXTRA_L_FLAGS="-fsanitize=address,undefined"
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+      - name: Build and run fuzz harness
+        run: cd src && make -j$(nproc) fuzz
+
+  macos-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install sqlite curl openssl@3
+      - name: Build all binaries
+        run: |
+          cd src
+          make -j$(sysctl -n hw.ncpu) all server \
+            EXTRA_C_FLAGS="-I$(brew --prefix sqlite)/include -I$(brew --prefix openssl@3)/include" \
+            EXTRA_L_FLAGS="-L$(brew --prefix sqlite)/lib -L$(brew --prefix openssl@3)/lib"
+      - name: Smoke test
+        run: |
+          ./aimee version
+          ./aimee version
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-0 libcurl4 libpam0g libssl3
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+      - name: Run integration tests
+        run: |
+          chmod +x aimee aimee-server
+          chmod +x src/tests/test_integration.sh
+          src/tests/test_integration.sh

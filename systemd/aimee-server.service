@@ -1,0 +1,17 @@
+[Unit]
+Description=Aimee Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aimee-server --persistent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/.config/aimee
+
+[Install]
+WantedBy=multi-user.target

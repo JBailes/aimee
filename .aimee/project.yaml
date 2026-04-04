@@ -1,0 +1,21 @@
+name: aimee
+language: c
+build: cd src && make
+test: cd src && make unit-tests
+lint: cd src && make lint
+format: cd src && make format
+install: ./install.sh
+risky_paths:
+  - src/db.c           # database migrations
+  - src/agent_http.c   # network layer
+verify:
+  - name: build
+    run: cd src && make
+  - name: unit-tests
+    run: cd src && make unit-tests
+  - name: lint
+    run: cd src && make lint
+definition_of_done:
+  - build succeeds
+  - all unit tests pass
+  - lint clean

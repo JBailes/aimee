@@ -1,0 +1,24 @@
+:root {
+  --primary: #3b82f6;
+  --font-size: 16px;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--font-size);
+}
+
+#header {
+  background: var(--primary);
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .container { padding: 0 8px; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

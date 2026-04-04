@@ -1,0 +1,311 @@
+# Proposal: Client-Aware MCP Auto-Registration
+
+## Problem
+
+`aimee` already has a local MCP server implementation in `src/mcp_server.c` and
+the build already defines an `aimee-mcp` binary in `src/Makefile`. However, the
+installation and registration path is incomplete:
+
+1. `install.sh` and `update.sh` install `aimee`, `aimee-direct`, and
+   `aimee-server`, but not `aimee-mcp`.
+2. `cmd_core.c` writes `.mcp.json` only when `/usr/local/bin/aimee-mcp` exists,
+   so workspace-local MCP registration often fails silently on fresh installs.
+3. MCP registration is not treated as a client-aware capability. The repo
+   already configures hooks for Claude, Gemini, and Codex in `install.sh`, but
+   MCP installation and registration are not handled with the same client-aware
+   logic.
+4. Codex likely needs a plugin wrapper in addition to raw MCP registration, but
+   that should be layered on top of the same `aimee-mcp` binary rather than
+   introducing a second backend.
+5. The existing Claude path must not regress. `aimee` already writes
+   workspace-local `.mcp.json` files and configures Claude hooks in
+   `install.sh`; broader MCP support must be additive, not disruptive.
+
+This leaves `aimee` with a working MCP implementation but no consistent policy
+for when to install it, how to register it, and how to preserve compatibility
+across multiple AI clients.
+
+## Goals
+
+- `aimee-mcp` is installed automatically when a supported MCP-capable client is
+  detected.
+- MCP registration is client-aware: each detected client is configured using its
+  native registration path without affecting the others.
+- Claude compatibility remains intact: existing `.mcp.json` generation and hook
+  setup continue to work unchanged.
+- Codex support can add plugin packaging without forking the MCP backend.
+- The installer and updater remain simple, deterministic, and safe on machines
+  with mixed client setups.
+
+## Approach
+
+Treat `aimee-mcp` as a first-class binary and make registration policy depend on
+which supported clients are present on the machine.
+
+### 1. Detect supported MCP-capable clients during install and update
+
+Extend `install.sh` and `update.sh` to detect known client installations. The
+initial target set is:
+
+- Claude
+- Codex
+- Gemini
+- Copilot
+
+Detection should follow the same model already used for hook setup in
+`install.sh`: check for a well-known config directory and/or a client binary on
+`PATH`.
+
+Examples:
+
+- Claude: `~/.claude` or `claude` on `PATH`
+- Codex: `~/.codex` or `codex` on `PATH`
+- Gemini: `~/.gemini` or `gemini` on `PATH`
+- Copilot: client-specific detection logic, only if there is a stable local MCP
+  registration surface
+
+If at least one supported MCP-capable client is detected, install `aimee-mcp`
+to a stable path.
+
+### 2. Install `aimee-mcp` once, register it per client
+
+`aimee-mcp` should be installed exactly once to a stable location such as
+`/usr/local/bin/aimee-mcp`.
+
+After installation, the installer should attempt client-specific registration
+for each detected client:
+
+- Claude: preserve the existing workspace-local `.mcp.json` path and any
+  existing Claude-compatible behavior
+- Codex: register via Codex’s MCP or plugin mechanism, depending on the final
+  supported local integration path
+- Gemini: register via Gemini’s local MCP config if available
+- Copilot: register only if the local Copilot client supports a documented MCP
+  config path
+
+Registration must be best-effort per client:
+
+- failure to register one client must not block registration for other clients
+- installer output should report which clients were detected, registered,
+  skipped, or unsupported
+
+### 3. Keep Claude’s current MCP flow unchanged
+
+Do not replace or reinterpret the existing `.mcp.json` flow in `cmd_core.c`.
+That path already supports workspace-local discovery and should remain the
+compatibility path for Claude.
+
+Specifically:
+
+- `aimee init` and `aimee setup` should continue writing `.mcp.json` exactly as
+  they do today
+- Claude hook configuration in `install.sh` must remain untouched except for any
+  mechanical refactor needed to share helper code
+- the MCP binary path referenced by `.mcp.json` should remain stable once
+  installed
+
+### 4. Add client-specific plugin packaging where needed
+
+Some clients may need more than raw MCP registration. Plugin packaging should be
+treated as a client-specific layer on top of the same installed `aimee-mcp`
+binary, not as a separate backend.
+
+#### Claude subsection
+
+Claude’s current compatibility path remains workspace-local `.mcp.json`.
+However, the proposal should reserve a Claude-specific plugin subsection for two
+reasons:
+
+- to document whether Claude ever needs plugin-style packaging beyond raw MCP
+  registration
+- to keep the proposal structurally symmetric with Codex and future clients
+
+For now, the Claude plugin subsection is intentionally conservative:
+
+- primary path: `.mcp.json` generated by `aimee init` / `aimee setup`
+- no new Claude-only backend
+- no change to Claude hook setup
+- if Claude later introduces a stable local plugin packaging mechanism that adds
+  value beyond `.mcp.json`, it should still point at the same `aimee-mcp`
+  binary
+
+#### Codex subsection
+
+Codex may need more than raw MCP registration. If so, add a repo-owned local
+plugin package, for example:
+
+- `plugins/aimee/.codex-plugin/plugin.json`
+- `plugins/aimee/skills/aimee/SKILL.md`
+
+This plugin does not introduce a new backend. It declares and documents usage of
+the same installed `aimee-mcp` binary.
+
+The Codex plugin should provide:
+
+- a manifest that identifies the plugin and exposes its interface to Codex
+- a skill that teaches Codex when to call `aimee` tools such as
+  `search_memory`, `find_symbol`, `preview_blast_radius`, `delegate`,
+  `record_attempt`, and `list_attempts`
+- minimal guidance on when to prefer local repo inspection versus `aimee`
+  memory/index queries
+
+#### Gemini and Copilot subsection
+
+Gemini and Copilot may eventually need plugin-style packaging or client-native
+wrappers as well. The same rule applies:
+
+- prefer direct MCP registration when that is sufficient
+- add client-specific packaging only when the client’s local integration model
+  requires it
+- always point packaging at the same installed `aimee-mcp` binary
+
+### 5. Preserve one MCP contract for all clients
+
+All clients must talk to the same `aimee-mcp` binary and the same capability
+surface already implemented in `src/mcp_server.c`:
+
+- `initialize`
+- `tools/list`
+- `tools/call`
+- `resources/list`
+- `resources/read`
+- `prompts/list`
+- `prompts/get`
+
+This keeps Claude, Codex, Gemini, and any future MCP-capable client aligned on
+one contract and avoids capability drift.
+
+### 6. Distinguish installation from support
+
+The installer should detect clients and try to register them, but documentation
+must clearly distinguish:
+
+- supported and tested client integrations
+- detected but unsupported clients
+- clients that require a plugin or custom local config
+
+This matters most for Copilot, where MCP support may depend on a specific local
+tool or extension rather than a single universal config path.
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `install.sh` | Detect supported clients; if any MCP-capable client is present, build and install `aimee-mcp`; register per client |
+| `update.sh` | Detect supported clients; if any MCP-capable client is present, build and update `aimee-mcp`; refresh per-client registration |
+| `src/cmd_core.c` | Keep `.mcp.json` generation intact; optionally refactor path handling so the installed `aimee-mcp` location is shared consistently |
+| `docs/proposals/pending/client-aware-mcp-auto-registration.md` | Document Claude, Codex, Gemini, and Copilot registration and packaging strategy |
+| `plugins/aimee/.codex-plugin/plugin.json` | New Codex plugin manifest backed by local `aimee-mcp` |
+| `plugins/aimee/skills/aimee/SKILL.md` | New Codex skill describing how and when to use `aimee` MCP capabilities |
+| `README.md` | Document client-aware MCP auto-registration and any client-specific setup requirements |
+| `docs/COMPATIBILITY.md` | State support expectations and registration modes for Claude, Codex, Gemini, and Copilot |
+
+## Acceptance Criteria
+
+- [ ] `install.sh` detects supported clients and installs `aimee-mcp` to a
+      stable path when at least one supported MCP-capable client is present
+- [ ] `update.sh` detects supported clients and updates `aimee-mcp` when at
+      least one supported MCP-capable client is present
+- [ ] `install.sh` reports, per client, whether registration succeeded, was
+      skipped, or is unsupported
+- [ ] `aimee init` and `aimee setup` still generate workspace-local `.mcp.json`
+      when `aimee-mcp` is installed
+- [ ] Existing Claude hook setup behavior in `install.sh` remains unchanged
+- [ ] The proposal explicitly documents Claude’s plugin-positioning subsection
+      while keeping `.mcp.json` as Claude’s primary path
+- [ ] Codex can discover and call `aimee` through its supported local MCP or
+      plugin integration path
+- [ ] Claude can still discover and call `aimee` through `.mcp.json` in an
+      initialized workspace
+- [ ] Gemini registration is attempted only when a stable local MCP config path
+      exists
+- [ ] Copilot registration is attempted only when a stable documented local MCP
+      config path exists
+- [ ] No client-specific backend fork is introduced; all clients use the same
+      `aimee-mcp` binary
+
+## Owner and Effort
+
+- **Owner:** TBD
+- **Effort:** M
+- **Dependencies:** Existing `src/mcp_server.c` capability surface; confirmed
+  local registration paths for Gemini and Copilot; local Codex plugin packaging
+  support
+
+## Rollout and Rollback
+
+- **Rollout:** Merge the installer changes first so machines with supported
+  MCP-capable clients reliably receive `aimee-mcp`. Then add any client-specific
+  packaging such as the Codex plugin. Claude users do not need to change their
+  workflow.
+- **Rollback:** Revert the installer and packaging changes. Claude continues to
+  work as before if `aimee-mcp` was already present, and runtime behavior
+  remains unchanged because this proposal does not alter the core MCP protocol.
+- **Blast radius:** Low to moderate. Primary risk is install-time confusion or
+  partial client registration, not runtime corruption. The runtime MCP
+  implementation remains shared and already exists.
+
+## Test Plan
+
+- [ ] Unit test: installer/build logic includes `aimee-mcp` in the expected
+      targets when any supported MCP-capable client is detected
+- [ ] Integration test: fresh install with Claude present places `aimee-mcp` at
+      the stable path and `aimee init` writes a valid `.mcp.json`
+- [ ] Integration test: fresh install with Codex present places `aimee-mcp` at
+      the stable path and Codex can discover the MCP server through its local
+      registration path
+- [ ] Integration test: fresh install with Gemini present attempts MCP
+      registration through Gemini’s supported local config path
+- [ ] Integration test: fresh install with Copilot present only attempts
+      registration when a documented local MCP path exists
+- [ ] Integration test: fresh install without any supported MCP-capable client
+      does not fail and leaves non-MCP setup paths untouched
+- [ ] Integration test: `aimee-mcp` responds to `initialize`, `tools/list`,
+      `resources/list`, and `prompts/list`
+- [ ] Manual verification: Claude in a workspace with generated `.mcp.json`
+      still sees and uses `aimee`
+- [ ] Manual verification: Codex with the local plugin or MCP registration
+      installed discovers and can call `aimee` tools
+- [ ] Failure injection: one client’s registration path is missing or invalid;
+      installer continues configuring the remaining detected clients
+- [ ] Failure injection: missing `aimee-mcp` binary produces a clear install or
+      setup failure instead of silent non-registration
+
+## Operational Impact
+
+- **Metrics:** None required initially.
+- **Logging:** Installer should print detected clients and per-client
+  registration outcomes; plugin install helpers should print the target path.
+- **Alerts:** None.
+- **Disk/CPU/Memory:** Negligible disk increase for one additional binary and
+  small client-specific config files or plugin directories. No steady-state
+  runtime increase beyond existing `aimee-mcp` usage.
+
+## Priority
+
+| Item | Priority | Effort | Impact |
+|------|----------|--------|--------|
+| Install `aimee-mcp` automatically when any supported MCP-capable client is detected | P1 | S | Unblocks MCP setup paths with minimal install overhead |
+| Add per-client registration with independent failure handling | P1 | M | Makes mixed-client setups reliable |
+| Keep Claude `.mcp.json` and hook behavior unchanged | P1 | S | Prevents regression for existing users |
+| Add Codex plugin packaging backed by `aimee-mcp` | P1 | M | Makes Codex integration first-class |
+| Add Gemini and Copilot registration where stable config paths exist | P2 | M | Expands supported clients without changing architecture |
+
+## Trade-offs
+
+**Why not install `aimee-mcp` unconditionally?** That would work technically,
+but client-aware installation keeps the default footprint smaller and matches the
+existing installer pattern of configuring only detected tools.
+
+**Why not replace `.mcp.json` with a single universal registration path?** The
+clients do not necessarily share one discovery mechanism. Claude already has a
+working workspace-local flow, and other clients may need different config or
+plugin paths.
+
+**Why not build separate backends per client?** That would duplicate the MCP
+surface and create drift. The repo already has `src/mcp_server.c`; the right
+move is to expose it consistently.
+
+**Why are Gemini and Copilot conditional?** Their local MCP registration story
+must be stable and documented before `aimee` should write config on the user’s
+machine. Detection alone is not enough to justify registration.
