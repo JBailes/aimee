@@ -989,8 +989,7 @@ int git_repo_root(const char *dir, char *out_root, size_t out_len)
    /* First try: detect if we're in a worktree by comparing --git-dir and
     * --git-common-dir. If they differ, --git-common-dir points to the main
     * repo's .git directory, and its parent is the true project root. */
-   snprintf(cmd, sizeof(cmd),
-            "git -C '%s' rev-parse --git-dir --git-common-dir 2>/dev/null", dir);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --git-dir --git-common-dir 2>/dev/null", dir);
    char *out = run_cmd(cmd, &rc);
    if (rc == 0 && out && out[0])
    {
