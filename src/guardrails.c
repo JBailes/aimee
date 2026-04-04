@@ -588,7 +588,7 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
 
    /* Worktree enforcement: block writes to real repo paths and redirect to
     * sibling worktree. Simple model: one worktree per git repo per session,
-    * created as <project-root>-<short-session-id> next to the project. */
+    * created as .aimee-<project>-<short-session-id> next to the project. */
    if (is_edit_tool(tool_name) || (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
                                    is_write_command(cmd->valuestring)))
    {
@@ -615,7 +615,8 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
 
       char git_root_buf[MAX_PATH_LEN];
       if (target_dir[0] == '/' &&
-          git_repo_root(target_dir, git_root_buf, sizeof(git_root_buf)) == 0)
+          git_repo_root(target_dir, git_root_buf, sizeof(git_root_buf)) == 0 &&
+          !is_aimee_worktree_path(target))
       {
          const char *sid = session_id();
          char wt_path[MAX_PATH_LEN];
