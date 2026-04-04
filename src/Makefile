@@ -49,7 +49,7 @@ L_AGENT   = $(L_CORE) -lssl -lcrypto $(HTTP_LIB)
 L_FULL    = $(L_AGENT) $(PAM_LIBS) $(LIBSECRET_LIBS) $(PLATFORM_FRAMEWORKS)
 
 # --- Layer 0: Foundation (db, config, util, text, render, log, platform, cJSON) ---
-CORE_SRCS = db.c config.c util.c text.c render.c log.c \
+CORE_SRCS = db.c config.c util.c text.c render.c log.c dstr.c \
             platform_event.c platform_ipc.c platform_random.c platform_process.c \
             client_integrations.c mcp_git.c mcp_tools.c git_verify.c
 CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/cJSON.o
