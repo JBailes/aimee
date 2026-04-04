@@ -50,7 +50,7 @@ The pipeline chains existing aimee features:
 |-------|-------------------|-----------------|----------------|
 | **Clarify** | `agent_clarify` (requirements-clarification proposal) | Task is vague (<50 words, no concrete anchors) | Ambiguity score < threshold |
 | **Plan** | `agent_plan_create` | Spec available (from clarify or direct task) | Plan created with steps |
-| **Review** | `agent_plan_review` (consensus-planning proposal) | Plan exists | Review status = approved |
+| **Review** | `agent_plan_review` (planning preparation/review pipeline) | Plan exists | Review status = approved |
 | **Execute** | `job_execute` (coordinated-parallel proposal) or sequential delegation | Plan approved | All steps done |
 | **QA** | `git_verify` + slop detection | Execution complete | Build + test + lint pass |
 | **Validate** | `verify_structured_review` (structured-code-review proposal) | QA passes | No blocking findings |

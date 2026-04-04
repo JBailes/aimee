@@ -1,81 +1,107 @@
-# Proposal: Hierarchical Instruction File Discovery with Budget Caps
+# Proposal: Hierarchical Context and Rule Discovery
 
 ## Problem
 
-Aimee's rules system (`rules.c`) loads project-level rules but lacks:
+Several pending proposals describe the same underlying gap: aimee lacks a coherent way to discover and inject local instructions.
 
-1. **Ancestor-chain discovery** — a monorepo with rules at multiple directory levels should load all of them when CWD is deep in the tree.
-2. **Content deduplication** — duplicated/symlinked rule files are loaded multiple times, wasting context.
-3. **Budget caps** — a verbose rules file can consume disproportionate system prompt space.
+- ancestor-chain rule discovery is incomplete
+- per-directory context files are not injected
+- rule/convention files are not surfaced near the edited file
 
-These issues affect all sessions equally — CLI and webchat both load rules into context.
-
-The `soongenwong/claudecode` repo at `rust/crates/runtime/src/prompt.rs` implements ancestor-chain discovery, content-hash deduplication, and per-file/total budget caps.
+These should be one context-discovery proposal. The agent should not have to separately learn project root rules, nearest directory context, and convention files through unrelated mechanisms.
 
 ## Goals
 
-- Rules files are discovered from CWD through every ancestor to the project root.
-- Duplicate content is detected by hash and skipped.
-- Per-file (4K) and total (12K) budget caps prevent context bloat.
-- Works identically in CLI and webchat sessions.
+- Discover instruction and convention files from the current directory up through the project root.
+- Prioritize closer, more relevant files over distant ones.
+- Deduplicate repeated content and enforce budget caps.
+- Inject relevant local context once per directory/session rather than on every read/edit.
+- Use the same logic across CLI, webchat, and delegates.
 
 ## Approach
 
-### Discovery Walk
+Build one hierarchical context-discovery subsystem covering three file classes:
 
-```
-CWD: /root/dev/aimee/src/tests/
-Search:
-  1. /root/dev/aimee/src/tests/.aimee-rules
-  2. /root/dev/aimee/src/.aimee-rules
-  3. /root/dev/aimee/.aimee-rules
-  4. ~/.config/aimee/global-rules  (always loaded)
-```
+1. explicit aimee rules
+2. nearest per-directory context files
+3. nearby convention files
 
-Files closer to CWD get priority (loaded first, more likely to fit within budget).
+### Discovery Order
+
+Walk from the target file directory toward the project root and consider:
+
+- `.aimee-rules`
+- `.aimee/context.md`
+- `AGENTS.md`
+- `.aimee/rules.md`
+- `CONTRIBUTING.md`
+- `.editorconfig`
+- configured custom rule/context paths
+
+Closer files win, but ancestor-chain discovery allows cross-cutting rules to still apply when budget permits.
+
+### Injection Policy
+
+- inject once per `(session, directory, file-content-hash)` style key
+- deduplicate identical content by hash
+- apply per-file and total context budgets
+- prefer explicit context files over generic convention files when budgets are tight
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/rules.c` | Add `rules_discover_ancestor_chain()`: walk CWD to root, deduplicate by content hash, apply budget caps |
-| `src/agent_context.c` | Use discovered rules chain instead of single project-root rules |
-| `src/config.c` | Add `rules_per_file_budget`, `rules_total_budget` config |
-| `src/webchat.c` | Use same discovery logic for webchat session context |
+| `src/rules.c` | Ancestor-chain discovery, deduplication, and budget caps |
+| `src/mcp_tools.c` | Local context/rule injection for Read/Edit/Write flows |
+| `src/agent_context.c` | Use unified discovery output when building prompts |
+| `src/config.c` | Parse discovery budgets and custom rule/context paths |
+| `src/server_session.c` | Track injected directory/rule state per session |
 
 ## Acceptance Criteria
 
-- [ ] Rules in nested directories are loaded when CWD is deeper
-- [ ] Duplicate files (same content) are loaded only once
-- [ ] Budget caps truncate oversized files and stop loading when total is exceeded
-- [ ] CLI and webchat use the same discovery logic
+- [ ] Nested directory rules and context files are discovered from the target path to the project root.
+- [ ] Duplicate content is loaded only once.
+- [ ] Per-file and total budget caps prevent prompt bloat.
+- [ ] Nearest context file wins when multiple candidates exist.
+- [ ] Convention/rule injection is cached per session/directory to avoid repetition.
+- [ ] CLI, webchat, and delegates use the same discovery logic.
 
 ## Owner and Effort
 
-- **Owner:** delegate (code)
-- **Effort:** S (1 day)
+- **Owner:** aimee
+- **Effort:** M
 - **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** Behavior change: ancestor rules are now loaded. Budget caps are configurable.
-- **Rollback:** Set discovery depth to 0 (project root only).
-- **Blast radius:** Unexpected ancestor rules could inject unwanted instructions. Log discovered files at INFO.
+- **Rollout:** Start with ancestor discovery and budgets, then add targeted tool-output injection.
+- **Rollback:** Reduce discovery scope back to project-root-only rules.
+- **Blast radius:** Unexpected ancestor rules could influence prompts, so discovered files should be visible in logs/debug output.
 
 ## Test Plan
 
-- [ ] Unit tests: ancestor walk, deduplication, budget truncation
-- [ ] Integration tests: nested .aimee-rules files, verify all loaded in correct order
-- [ ] Manual verification: place rules at multiple levels, confirm all appear in context
+- [ ] Unit tests: ancestor walk, nearest-file precedence, deduplication, and budget truncation
+- [ ] Unit tests: rule/context injection caching
+- [ ] Integration tests: nested directory trees with mixed context/rule files
+- [ ] Manual verification: place rules at multiple levels and confirm the final injected set is sensible
+
+## Operational Impact
+
+- **Metrics:** `context_files_discovered`, `context_injections_total`, `context_budget_truncations_total`
+- **Logging:** INFO/DEBUG on discovered files and budget decisions
+- **Alerts:** None
+- **Disk/CPU/Memory:** Small directory-walk overhead with session caching
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Ancestor-chain discovery | P2 | S | High — monorepo support |
-| Budget caps | P2 | S | High — prevents context bloat |
-| Content deduplication | P3 | S | Low — edge case |
+| Ancestor-chain discovery | P1 | S | High |
+| Nearest-directory context injection | P1 | S | High |
+| Budget caps and deduplication | P1 | S | High |
 
-## Source Reference
+## Trade-offs
 
-Implementation reference: `soongenwong/claudecode` at `rust/crates/runtime/src/prompt.rs`.
+- **Why merge these proposals?** Rule discovery and local context injection are one input-selection problem.
+- **Why not inject everything always?** Context budgets matter; relevance ranking is more important than completeness.
+- **Why include convention files like `.editorconfig` and `CONTRIBUTING.md`?** They often encode the exact conventions agents otherwise miss.

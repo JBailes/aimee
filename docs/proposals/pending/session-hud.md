@@ -1,148 +1,120 @@
-# Proposal: Session HUD — Real-Time Workflow Status Display
+# Proposal: Real-Time Session Status and HUD
 
 ## Problem
 
-When aimee runs multi-step workflows (planning, delegation, verification, completion loops), the user has no real-time visibility into what's happening. Status is only available by running explicit commands (`aimee plans list`, `aimee job status`). During long-running operations, the user is blind.
+There are two overlapping status proposals:
 
-Aimee has a web dashboard (`dashboard.c` on port 9200) that shows delegations, metrics, traces, and plans, but:
-- It's a pull-based web UI — you have to open a browser and refresh
-- It doesn't show live workflow state (which phase of a pipeline, which iteration of a completion loop)
-- No terminal-based option for users who prefer CLI
+- a terminal HUD for live workflow state
+- in-session live stats for turns, tokens, tool outcomes, and context usage
 
-oh-my-codex's HUD provides a terminal-based live status display with `--watch` mode that shows current mode, iteration counts, worker status, and timing — all from file-based state polling. The insight is that a lightweight terminal HUD is more useful during active development than a full web dashboard.
-
-Evidence:
-- `dashboard.c` serves an HTML page on :9200 — great for overview, but not for live monitoring during work
-- No terminal-based status display exists
-- No way to see pipeline/completion-loop/job progress without running a command
-- The web dashboard doesn't show phase-level workflow state
+These should be one observability proposal with multiple display surfaces instead of separate proposals with overlapping counters and APIs.
 
 ## Goals
 
-- A terminal-based HUD shows live workflow state (current mode, active plan, job progress, delegate activity)
-- The HUD updates automatically (polling-based, like `watch`)
-- Works alongside the primary agent session without interfering
-- Lightweight — no dependencies beyond terminal capabilities
+- Expose real-time session and workflow status through CLI, chat, webchat, and machine-readable JSON.
+- Show both workflow-level state and per-session stats.
+- Keep the HUD lightweight and polling-based.
+- Reuse one underlying status aggregation layer.
 
 ## Approach
 
-### 1. `aimee hud` command
+Build one status aggregation layer and expose it through:
+
+1. `aimee hud`
+2. chat `/status`
+3. webchat stats panel and API
+4. JSON endpoints for other tools
+
+### `aimee hud`
 
 ```bash
-aimee hud              # one-shot status snapshot
-aimee hud --watch      # live updating (1s interval)
-aimee hud --watch 5    # live updating (5s interval)
+aimee hud
+aimee hud --watch
+aimee hud --json
 ```
 
-### 2. Status data sources
+### Aggregated State
 
-The HUD aggregates state from existing aimee subsystems:
+The shared status layer should include:
 
-| Section | Source | What it shows |
-|---------|--------|--------------|
-| Mode | Config/session state | plan/implement/ecomode |
-| Plan | `execution_plans` table | Active plan, step progress (3/7 done) |
-| Job | `jobs` + `job_tasks` tables | Running job, task status counts |
-| Pipeline | `pipelines` table | Current phase, iteration count |
-| Completion | Plan completion state | Iteration N/max, last error |
-| Delegates | Recent `delegate_attempts` | Active/recent delegations, latency |
-| Verify | Last verify run | Pass/fail, finding counts |
-| Session | Session metadata | Duration, provider, token estimate |
+- mode and provider
+- active plan/job/pipeline/completion-loop state
+- delegate activity
+- verify status
+- turn count
+- token/context usage
+- tool success/failure/skip counts
 
-### 3. Terminal rendering
+### In-Session `/status`
 
-Use ANSI escape codes for a compact, colored display:
+Add `/status` to CLI chat and a webchat stats panel using the same aggregated state.
 
-```
-━━━ aimee hud ━━━━━━━━━━━━━━━━━━━━━━━━━
- mode: implement │ eco: off │ session: 23m
- plan: #12 [executing] 4/7 steps done
- job:  #3  [running] 2 active, 1 pending
- pipe: #1  [qa] iter 2/5 (build: FAIL)
- delegates: 2 active (local-ollama, claude)
- verify: PASS (0 critical, 2 low findings)
- last: delegate [review] → ok (1.2s ago)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+### Dashboard and JSON
 
-Implementation:
-- Query each data source (existing DB queries + session state files)
-- Render with ANSI colors (green=ok, yellow=active, red=fail)
-- `--watch` mode: clear screen, redraw every N seconds
-- Output to stderr if stdout is piped (so it can coexist with other tools)
+Expose the same status payload via:
 
-### 4. JSON output mode
-
-```bash
-aimee hud --json       # machine-readable status
-```
-
-Returns the same data as JSON, enabling integration with external monitoring or custom dashboards.
-
-### 5. Integration with existing dashboard
-
-Add a `/api/hud` endpoint to `dashboard.c` that returns the same aggregated status as JSON. The web dashboard can then include a live status section alongside its existing cards.
+- `/api/hud`
+- session stats API
+- JSON output for scripts and dashboards
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/cmd_wm.c` or new `src/hud.c` | HUD rendering, data aggregation, watch loop |
+| `src/hud.c` or equivalent | Shared status aggregation, HUD rendering, watch loop |
+| `src/agent.c` | Maintain turn counts and session stats |
+| `src/agent_tools.c` | Maintain tool success/failure/skip counters |
+| `src/cmd_chat.c` | Add `/status` using shared aggregation |
+| `src/webchat.c` | Add stats API/SSE updates and wire shared aggregation |
+| `src/webchat_assets.c` | Add stats panel/sidebar |
 | `src/dashboard.c` | Add `/api/hud` endpoint |
-| `src/cmd_core.c` | Add `hud` subcommand routing |
-| `src/tests/test_hud.c` | Tests for data aggregation and JSON output |
+| `src/cmd_core.c` | Add `hud` subcommand |
 
 ## Acceptance Criteria
 
-- [ ] `aimee hud` shows a one-shot status snapshot in the terminal
-- [ ] `aimee hud --watch` updates live at configurable intervals
-- [ ] Status includes: mode, active plan/job/pipeline, delegate activity, verify status
-- [ ] `aimee hud --json` outputs machine-readable status
-- [ ] `/api/hud` endpoint added to web dashboard
-- [ ] HUD handles missing state gracefully (no active plan → section omitted)
+- [ ] `aimee hud` shows a one-shot status snapshot in the terminal.
+- [ ] `aimee hud --watch` updates live at configurable intervals.
+- [ ] Status includes workflow state plus token/context/tool counters.
+- [ ] `/status` in chat exposes the same session stats without leaving the session.
+- [ ] JSON endpoints expose the same aggregated status for automation.
+- [ ] Missing state is handled gracefully.
 
 ## Owner and Effort
 
 - **Owner:** aimee
-- **Effort:** S (2-3 focused sessions)
-- **Dependencies:** None required, but shows richer data when other proposals (pipeline, jobs, completion loop) are implemented
+- **Effort:** M
+- **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** New command. No changes to existing behavior.
-- **Rollback:** Revert commit. No impact.
-- **Blast radius:** None — read-only command.
+- **Rollout:** Start with shared aggregation and `aimee hud`, then add chat/webchat surfaces.
+- **Rollback:** Remove display surfaces independently; underlying counters remain useful elsewhere.
+- **Blast radius:** Display only.
 
 ## Test Plan
 
 - [ ] Unit tests: data aggregation from each source
 - [ ] Unit tests: JSON output format
-- [ ] Unit tests: graceful handling of missing data (no active plan, no delegates)
-- [ ] Manual verification: run HUD alongside a delegation, observe live status
+- [ ] Integration tests: live session updates reflected in HUD and `/status`
+- [ ] Manual verification: run HUD alongside an active delegation
 
 ## Operational Impact
 
-- **Metrics:** None (read-only feature)
-- **Logging:** None
+- **Metrics:** None beyond existing counters
+- **Logging:** None required beyond debug during development
 - **Alerts:** None
-- **Disk/CPU/Memory:** DB queries every 1-5 seconds in watch mode. Negligible.
+- **Disk/CPU/Memory:** Polling overhead only
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Core HUD rendering + data aggregation | P1 | S | High — immediate visibility |
-| Watch mode | P1 | S | High — live monitoring |
-| JSON output | P2 | S | Medium — programmability |
-| Dashboard API integration | P3 | S | Low — web dashboard already exists |
+| Shared status aggregation | P1 | S | High |
+| HUD + watch mode | P1 | S | High |
+| Chat/webchat status surfaces | P2 | S | Medium |
 
 ## Trade-offs
 
-**Why terminal-based instead of improving the web dashboard?**
-The web dashboard requires opening a browser. A terminal HUD can run in a tmux pane next to the agent session — lower friction for the common case. Both can coexist.
-
-**Why polling instead of push-based updates?**
-Push would require a notification mechanism (websockets, IPC). Polling every 1-5 seconds from SQLite is negligible overhead and dramatically simpler. The HUD is read-only; there's no state to keep in sync.
-
-**Why not embed the HUD in the agent session output?**
-The agent controls its own output format. A separate HUD command runs in its own terminal/pane, avoiding interference with the agent's conversation flow.
+- **Why merge HUD and live-session-stats?** They depend on the same counters and aggregation logic.
+- **Why keep polling?** It is simpler and adequate for read-only monitoring.
+- **Why not only improve the web dashboard?** A terminal HUD is lower-friction during active development.

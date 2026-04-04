@@ -1,101 +1,116 @@
-# Proposal: Session Resume for Chat and Webchat
+# Proposal: Session Resume, Handoff, and Persistent Plan Progress
 
 ## Problem
 
-When a chat session ends (user exits, connection drops, timeout), the conversation is gone. The user must start fresh, re-explain context, and redo work. Aimee's server tracks sessions in `server_sessions` and the CLI can `--resume` Claude sessions, but there is no first-class session resume for aimee's own chat and webchat modes.
+The pending set has three continuity proposals that all address the same failure: work is lost when a session or plan is interrupted.
 
-Mistral-vibe implements session resume with `SessionLoader` (list/search/load past sessions), `resume_sessions.py` (unified local+remote resume), and message persistence in JSONL format. Users can list recent sessions and continue any of them.
+- chat/webchat sessions cannot be resumed cleanly
+- users cannot export a compact handoff artifact to continue elsewhere
+- plan progress is too ephemeral and can disappear on crash/restart
+
+These should be one continuity proposal covering automatic resume, explicit handoff, and persisted plan state.
 
 ## Goals
 
-- Users can list recent chat sessions and resume any of them (CLI and webchat).
-- Session messages, tool state, and system prompt are restored on resume.
-- Webchat shows a session picker sidebar for quick resume.
-- Sessions are searchable by title, date, and working directory.
+- Users can resume prior chat/webchat sessions.
+- Sessions can be exported as a structured handoff document for clean continuation in a new session.
+- Plan execution progress survives crashes, restarts, and handoffs.
+- Continuity data is queryable and searchable rather than living only in memory.
 
 ## Approach
 
-### Storage
+Implement one continuity subsystem with three surfaces:
 
-Persist conversation messages to the session DB alongside existing `server_sessions` metadata. Each message is stored as a row in a new `session_messages` table with role, content, tool call data, and sequence number. The first user message becomes the session title.
+1. session transcript persistence and resume
+2. explicit handoff export
+3. persisted plan progress state
 
-### CLI
+### Session Storage and Resume
 
+Persist chat messages, tool state, and prompt context to a searchable store. Support:
+
+```bash
+aimee chat --resume
+aimee chat --resume <session-id>
+aimee chat --list-sessions
 ```
-aimee chat --resume              # resume most recent session
-aimee chat --resume <session-id> # resume specific session
-aimee chat --list-sessions       # list recent sessions
-```
 
-On resume, load messages from the DB, rebuild the conversation array, and continue the agent loop from where it left off.
+Webchat should expose a recent-session picker and resume endpoints.
 
-### Webchat
+### Handoff Export
 
-- Session list endpoint: `GET /api/sessions` returns recent sessions with title, timestamp, message count.
-- Resume endpoint: `POST /api/sessions/<id>/resume` loads messages and starts SSE streaming.
-- Session picker sidebar in the webchat UI (already has tabs — add session history to the sidebar).
+Add `aimee handoff` to emit a compact, self-contained continuation document including:
 
-### Message Persistence
+- original request
+- completed work
+- remaining tasks
+- key decisions
+- modified files
+- constraints
+- next recommended action
 
-After each agent turn, append new messages to the `session_messages` table. This is incremental — only new messages since last persist are written. Use a sequence counter to maintain order.
+### Persistent Plan Progress
+
+Persist active plan state to `.aimee/plan-state.json` or an equivalent resumable store so incomplete plans can be detected and resumed after interruption.
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/db.c` | Add `session_messages` table (session_id, seq, role, content, tool_calls, tool_results, created_at) |
-| `src/server_session.c` | Add message persistence, session search, resume handler |
-| `src/cmd_chat.c` | Add `--resume`, `--list-sessions` flags; load messages on resume |
-| `src/webchat.c` | Add session list and resume API endpoints |
-| `src/webchat_assets.c` | Add session picker sidebar to webchat UI |
-| `src/headers/server.h` | New handler declarations |
+| `src/db.c` | Add `session_messages` table and continuity metadata |
+| `src/server_session.c` | Message persistence, session search, resume handler |
+| `src/cmd_chat.c` | `--resume`, `--list-sessions`, and handoff hooks |
+| `src/webchat.c` | Session list and resume endpoints |
+| `src/webchat_assets.c` | Session picker sidebar |
+| `src/tasks.c` | Persistent plan progress serialization |
+| `src/agent_plan.c` | Detect incomplete plan state and offer resume |
 
 ## Acceptance Criteria
 
-- [ ] `aimee chat --list-sessions` shows recent sessions with title, date, message count
-- [ ] `aimee chat --resume` resumes the most recent session with full message history
-- [ ] `aimee chat --resume <id>` resumes a specific session
-- [ ] Webchat session picker shows recent sessions and allows one-click resume
-- [ ] Resumed session preserves tool call history and system prompt
-- [ ] Session title auto-derived from first user message (max 80 chars)
-- [ ] Sessions searchable by title substring
+- [ ] `aimee chat --list-sessions` shows recent sessions with title, date, and message count.
+- [ ] `aimee chat --resume` resumes the most recent session with full history.
+- [ ] Webchat session picker shows recent sessions and allows one-click resume.
+- [ ] `aimee handoff` exports a structured continuation document with required sections.
+- [ ] Incomplete plans are detected after restart and can be resumed with preserved task status.
+- [ ] Sessions remain searchable by title substring.
 
 ## Owner and Effort
 
 - **Owner:** aimee
-- **Effort:** M (2-3 days)
+- **Effort:** L
 - **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** New DB table auto-created. CLI flags are additive. Webchat sidebar is new UI.
-- **Rollback:** Drop table. Remove flags. No impact on existing sessions.
-- **Blast radius:** Only affects chat/webchat. No impact on delegates or server operations.
+- **Rollout:** Start with transcript persistence and resume, then add handoff export, then persist plan progress.
+- **Rollback:** Each surface can be removed independently; older continuity data can simply be ignored.
+- **Blast radius:** Mainly chat, webchat, and plan recovery paths.
 
 ## Test Plan
 
 - [ ] Unit tests: message persist, load, search
+- [ ] Unit tests: handoff document includes required sections
+- [ ] Unit tests: plan state persistence and resume detection
 - [ ] Integration tests: start session → exit → resume → verify history intact
-- [ ] Failure injection: resume with corrupted messages — verify graceful degradation
-- [ ] Manual verification: webchat session picker flow end-to-end
+- [ ] Integration tests: interrupt a plan mid-execution, restart, verify resume
 
 ## Operational Impact
 
-- **Metrics:** `session_resumed` counter, `session_messages_stored` gauge
-- **Logging:** INFO on session resume/persist, WARN on load failures
+- **Metrics:** `session_resumed`, `session_messages_stored`, `handoff_exports`, `plan_resume_detected`
+- **Logging:** INFO on session resume/persist/handoff generation, WARN on corrupted continuity state
 - **Alerts:** None
-- **Disk/CPU/Memory:** Moderate disk for message storage. Add periodic cleanup of sessions older than configurable retention (default 30 days).
+- **Disk/CPU/Memory:** Moderate disk for transcripts and lightweight plan-state files
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Session Resume | P2 | M | High — major UX improvement, eliminates wasted re-explanation |
+| Session resume | P1 | M | High |
+| Handoff export | P2 | S | Medium |
+| Persistent plan progress | P1 | S | High |
 
 ## Trade-offs
 
-**Alternative: Store messages as JSONL files.** Simpler but harder to search and query. SQLite is already the persistence layer and supports indexing.
-
-**Alternative: Only store the last N sessions.** Implemented as retention policy — default 30 days, configurable.
-
-**Known limitation:** Large sessions (hundreds of turns) may be slow to reload. Mitigated by only loading the last N messages and summarizing earlier ones (pairs with session-compaction proposal).
+- **Why merge these continuity proposals?** Resume, handoff, and persisted plan progress solve the same interruption boundary at different levels.
+- **Why keep both resume and handoff?** Resume is automatic continuation of the same state; handoff is a portable summary for a fresh state.
+- **Known limitation:** Very large sessions may need compaction-aware resume rather than raw replay.

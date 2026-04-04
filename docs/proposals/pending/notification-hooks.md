@@ -18,6 +18,8 @@ Evidence:
 - The web dashboard shows historical data but doesn't push notifications
 - No webhook/notification infrastructure exists in aimee
 
+There is also a duplicate proposal focused only on desktop notifications for idle sessions. Desktop notifications should be one built-in target of the broader event-hook system, not a standalone feature.
+
 ## Goals
 
 - Configurable event hooks fire notifications when key events occur
@@ -109,6 +111,7 @@ aimee notify test             # send a test notification
 
 - [ ] `aimee notify on` enables desktop notifications with zero config
 - [ ] Background delegation completion triggers a notification
+- [ ] Idle session states such as "needs input", "permission needed", and "stalled" can trigger desktop notifications with debounce
 - [ ] Circuit breaker triggers generate a notification
 - [ ] Webhook targets receive POST with event data
 - [ ] Custom command targets execute with template variable substitution

@@ -1,116 +1,79 @@
-# Proposal: AI Slop Detection and Cleanup in Guardrails
+# Proposal: AI Slop Detection and Cleanup
 
 ## Problem
 
-When delegates (or the primary agent) generate code, it often contains "AI slop" — patterns that work but degrade codebase quality:
-- Dead code and unreachable branches
-- Needless abstractions (pass-through wrappers, single-use helpers)
-- Copy-pasted logic with minor variations
-- Speculative error handling for impossible cases
-- Verbose comments restating the obvious
+Aimee has multiple overlapping ideas for catching low-quality AI-generated code, but the work is split across separate proposals for comment linting, broad slop detection, and explicit cleanup commands. That fragmentation makes priority unclear and encourages half-solutions:
 
-Aimee's guardrails (`guardrails.c`) currently check for sensitive files, anti-patterns in tool usage, and plan mode enforcement. They do not inspect the *content* of generated code for quality issues.
+- warning-only comment checks miss broader structural issues
+- automatic post-write detection without a cleanup path leaves the agent to ignore findings
+- a standalone cleanup command without shared detection logic duplicates heuristics
 
-oh-my-codex's `$ai-slop-cleaner` skill addresses this with a systematic 5-category detection pass (duplication, dead code, needless abstraction, boundary violations, missing tests) that runs after code generation, with regression tests locked before cleanup. The key value is catching AI-generated quality debt before it's committed.
-
-Evidence:
-- `guardrails.c` has `post_tool_update()` that fires on every PostToolUse — perfect hook point
-- `trace_analysis.c` already mines traces for patterns but focuses on execution anti-patterns, not code quality
-- No existing mechanism inspects file contents after writes for quality issues
-- The existing `aimee verify` runs build/test but not code quality analysis
+The actual need is one coherent flow: cheap detection on writes, actionable findings in-session, and an explicit cleanup path when the user wants it.
 
 ## Goals
 
-- Code written by delegates or the primary agent is automatically checked for common AI slop patterns
-- Detection runs as a PostToolUse check after file writes, not as a separate manual step
-- Findings are surfaced in the session context so the agent can self-correct
-- A dedicated `aimee clean` command runs targeted cleanup on specified files
-- Detection is lightweight — pattern matching in C, not delegate calls (save expensive delegate review for structured-code-review proposal)
+- Detect common AI-slop patterns immediately after file writes.
+- Cover both comment-level slop and structural slop.
+- Keep detection cheap and advisory by default.
+- Provide an explicit `aimee clean` workflow for targeted cleanup and optional delegate-assisted fixes.
+- Make rules conservative enough that agents do not learn to ignore them.
 
 ## Approach
 
-### 1. Pattern-based slop detection in C
+Build one shared slop-detection subsystem and expose it in two modes:
 
-Add `slop_detect.c` with fast pattern matching for common AI slop:
+1. `post_tool_update()` runs lightweight detection after `Write`/`Edit`.
+2. `aimee clean` runs the same detector on demand, with optional `--fix` delegation.
 
-```c
-typedef enum {
-    SLOP_DEAD_CODE,       // unreachable after return/exit, #if 0 blocks
-    SLOP_PASS_THROUGH,    // functions that just call another function with same args
-    SLOP_DUPLICATE,       // identical or near-identical blocks within a file
-    SLOP_VERBOSE_COMMENT, // comments restating the line below ("increment i" above "i++")
-    SLOP_SPECULATIVE,     // catch blocks for errors that can't happen in context
-} slop_category_t;
+### Detection Scope
 
-typedef struct {
-    slop_category_t category;
-    int line;
-    int severity;  // 0=info, 1=warn, 2=error
-    char description[256];
-} slop_finding_t;
+Use a fast C implementation with conservative heuristics:
 
-int slop_detect_file(const char *path, slop_finding_t *out, int max_findings);
-```
+- verbose or redundant comments
+- placeholder TODOs and AI-attribution comments
+- dead code and unreachable branches
+- pass-through wrappers and needless abstraction
+- duplicate blocks within a file
+- speculative error handling or over-defensive null checks
 
-Detection heuristics (fast, line-based, no AST):
-- **Dead code**: code after unconditional `return`/`exit`/`break` in same block
-- **Pass-through**: function body is a single `return other_func(same, args);`
-- **Duplicate**: sliding window comparison of 5+ line blocks within the same file (normalized whitespace)
-- **Verbose comments**: single-line comment immediately above a line, where the comment adds no information beyond the code
-- **Speculative**: empty catch/except blocks, `if (ptr == NULL)` right after a guaranteed-non-null allocation
+Keep/remove guidance should be explicit so `--fix` has bounded behavior:
 
-### 2. PostToolUse integration
+- keep comments that explain business rules, algorithms, regexes, or issue history
+- remove comments that restate code or leave placeholders behind
+- keep validation at boundaries and real I/O failure handling
+- remove obviously redundant defensive checks and pass-through boilerplate
 
-In `post_tool_update()`, after a file write (Edit or Write tool), run `slop_detect_file()` on the modified file. If findings exist, append them to the session context:
-
-```
-# Code Quality Notes
-- src/foo.c:42 [dead_code] Unreachable code after return on line 41
-- src/foo.c:78 [pass_through] Function bar() is a pass-through to baz()
-```
-
-This is advisory — it doesn't block the tool call, but the primary agent sees the notes and can self-correct.
-
-### 3. `aimee clean` CLI command
-
-For explicit cleanup runs:
+### User Flows
 
 ```bash
-aimee clean <file>              # detect slop in a specific file
-aimee clean --changed           # detect in all files changed since last commit
-aimee clean --fix <file>        # delegate cleanup to a code delegate
+aimee clean src/foo.c
+aimee clean --changed
+aimee clean --fix src/foo.c
 ```
 
-`--fix` delegates the cleanup to a `refactor` role delegate with the findings as context, then re-runs detection to verify the fixes didn't introduce regressions.
-
-### 4. Working memory integration
-
-Store slop findings in working memory so they persist within the session:
-
-```c
-wm_set(db, session_id, "slop:src/foo.c", findings_json, "code_quality", 3600);
-```
-
-TTL of 1 hour — findings are relevant for the current editing session, not permanently.
+- default mode reports findings with `file:line`
+- `--fix` delegates a focused cleanup using the detector output as guardrails
+- after `--fix`, rerun detection and existing verification to confirm improvement
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/slop_detect.c` | New: pattern-based slop detection heuristics |
-| `src/headers/slop_detect.h` | New: slop types and detection function |
-| `src/guardrails.c` | Extend `post_tool_update()` to run slop detection on file writes |
-| `src/cmd_core.c` | Add `clean` subcommand |
-| `src/tests/test_slop_detect.c` | Tests with known-slop test files |
+| `src/slop_detect.c` | New shared detector for comment and structural slop |
+| `src/headers/slop_detect.h` | Finding types, severity, and detector API |
+| `src/guardrails.c` | Run detection after file writes and append findings to tool output/session context |
+| `src/cmd_core.c` | Add `clean` subcommand and `--fix` mode |
+| `src/git_verify.c` | Optional verification step for changed-file slop checks |
+| `src/tests/test_slop_detect.c` | Detector tests and false-positive guards |
 
 ## Acceptance Criteria
 
-- [ ] `slop_detect_file()` detects dead code, pass-throughs, duplicates, verbose comments, and speculative handling
-- [ ] PostToolUse on file writes runs detection and surfaces findings in session context
-- [ ] `aimee clean <file>` reports findings with file:line references
-- [ ] `aimee clean --fix <file>` delegates cleanup and verifies
-- [ ] Detection completes in <50ms per file (no delegate calls, pure C pattern matching)
-- [ ] False positive rate is acceptable — detection is conservative (prefer false negatives)
+- [ ] One detector covers comment slop and structural slop categories.
+- [ ] Post-write checks append advisory findings without blocking edits.
+- [ ] `aimee clean <file>` reports findings with stable file:line output.
+- [ ] `aimee clean --fix <file>` delegates cleanup and reruns detection.
+- [ ] Legitimate comments and boundary validation are preserved.
+- [ ] Detection stays fast enough for post-write use, target `<50ms` on typical files.
 
 ## Owner and Effort
 
@@ -120,41 +83,36 @@ TTL of 1 hour — findings are relevant for the current editing session, not per
 
 ## Rollout and Rollback
 
-- **Rollout:** PostToolUse detection is advisory only — no blocking behavior. Ship detection first, `--fix` second.
-- **Rollback:** Revert commit. No DB changes. Guardrails revert to previous behavior.
-- **Blast radius:** None. Advisory only. Worst case: slightly more text in session context.
+- **Rollout:** Ship in phases: detector first, post-write integration second, `--fix` last.
+- **Rollback:** Revert detector integration or disable the verification step; `aimee clean` remains additive.
+- **Blast radius:** Advisory by default. Worst case is noisy findings or low-value cleanup diffs.
 
 ## Test Plan
 
-- [ ] Unit tests: each slop category with known-good and known-bad files
-- [ ] Unit tests: false positive check — clean files produce no findings
-- [ ] Unit tests: performance — detection on 1000-line files completes in <50ms
-- [ ] Integration tests: write a file with slop → PostToolUse produces findings
-- [ ] Manual verification: introduce dead code, observe it flagged in session context
+- [ ] Unit tests for each slop category with known-good and known-bad fixtures.
+- [ ] Unit tests covering false positives on legitimate comments and validation code.
+- [ ] Integration test: write a file with slop and confirm findings appear in tool output.
+- [ ] Integration test: `aimee clean --fix` improves a file without changing behavior.
+- [ ] Performance test on 1k+ line files.
 
 ## Operational Impact
 
-- **Metrics:** `slop_findings_total{category}`, `slop_detect_latency_ms`
-- **Logging:** Detection results to stderr: `aimee: slop: src/foo.c: 2 findings (1 dead_code, 1 pass_through)`
+- **Metrics:** `slop_findings_total{category}`, `slop_detect_latency_ms`, `slop_fix_runs_total`
+- **Logging:** INFO summary for explicit clean runs, DEBUG for automatic post-write findings
 - **Alerts:** None
-- **Disk/CPU/Memory:** Negligible. Pattern matching is O(n) per file, no I/O beyond reading the file.
+- **Disk/CPU/Memory:** Negligible outside explicit `--fix` delegate runs
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Core detection heuristics | P1 | M | High — catches the most common issues |
-| PostToolUse integration | P1 | S | High — makes detection automatic |
-| CLI `clean` command | P2 | S | Medium — manual trigger |
-| `--fix` delegate cleanup | P3 | S | Low — nice-to-have, manual cleanup works |
+| Shared detector | P1 | M | High |
+| Post-write advisory integration | P1 | S | High |
+| `aimee clean` reporting | P2 | S | Medium |
+| `--fix` delegate cleanup | P3 | S | Medium |
 
 ## Trade-offs
 
-**Why C pattern matching instead of delegate-based analysis?**
-Speed. PostToolUse runs on every file write. A delegate call per write would add seconds of latency and cost tokens. Pattern matching in C is effectively free. Save delegate-based review for the structured-code-review proposal which runs on the full diff, not per-write.
-
-**Why conservative (prefer false negatives)?**
-False positives in session context would train the primary agent to ignore findings. Better to catch 60% of real slop with high confidence than 90% with frequent false alarms.
-
-**Why not integrate with existing trace_analysis.c?**
-Trace analysis mines *execution* patterns (retry loops, tool sequences). Slop detection inspects *code* content. Different inputs, different heuristics, different output formats. Keeping them separate is cleaner.
+- **Why merge detection and cleanup?** The cleanup path is only safe if it reuses the exact same detector and keep/remove rules.
+- **Why stay advisory?** Blocking on heuristic code-quality checks will quickly become counterproductive.
+- **Why keep `aimee clean` explicit?** Automatic mutation during normal edits is too aggressive; explicit cleanup keeps the risk bounded.

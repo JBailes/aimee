@@ -1,249 +1,151 @@
-# Proposal: Structured Requirements Clarification
+# Proposal: Planning Preparation and Review Pipeline
 
 ## Problem
 
-When the primary agent receives a vague or ambiguous task, it either guesses at intent and builds the wrong thing, or asks an unstructured series of questions that may miss critical ambiguities. There is no systematic process to refine requirements before planning begins.
+The pending set currently treats planning as four separate concerns:
 
-This leads to:
-- Wasted implementation tokens when the agent builds something that doesn't match intent
-- Incomplete plans that miss edge cases because scope was never clarified
-- No record of *what was clarified and what was assumed* — making it hard to trace why a plan went wrong
+- clarify vague requirements
+- classify task complexity to choose planning depth
+- validate plan references mechanically
+- run adversarial or multi-delegate plan review
 
-oh-my-codex's `$deep-interview` skill addresses this with a structured Socratic interview: staged questioning (intent → feasibility → brownfield context), quantitative ambiguity scoring, and a readiness gate that blocks handoff to planning until clarity thresholds are met. The key insight is that clarification is a *measurable* process, not an open-ended conversation.
+These are all part of one planning-preparation pipeline. A strong plan should:
 
-Evidence:
-- Aimee's plan mode has no pre-planning clarification step
-- The `aimee delegate` system can route `explain` and `reason` tasks but has no "interview the user" workflow
-- Session context includes project memories but not "open questions" or "unresolved assumptions"
-- No existing proposal covers requirements clarification
+1. start from clarified requirements when needed
+2. choose an appropriate planning depth
+3. validate references and executability before execution
+4. optionally pass review before implementation begins
+
+Keeping these as separate proposals duplicates state and leaves later pipeline proposals redefining the same gates.
 
 ## Goals
 
-- Ambiguous tasks go through a structured clarification phase before planning, reducing rework
-- Clarification state is persisted (in the DB, not ephemeral) so it survives session boundaries
-- An ambiguity score quantifies readiness — the agent and user can see how much is still unclear
-- Clarification produces a spec artifact that feeds directly into plan creation
-- The clarification flow works both interactively (user answers questions) and with delegate-assisted research (agent gathers context from codebase/docs)
+- Ambiguous tasks can be clarified before planning.
+- Trivial tasks can skip heavyweight planning.
+- Generated plans can be mechanically validated before execution.
+- Plans can be reviewed and contested before implementation.
+- The pipeline produces one reviewable spec/plan artifact for later execution stages.
 
 ## Approach
 
-### 1. Clarification session model
+Implement one planning-preparation pipeline with four stages:
 
-Add a `clarifications` table to track clarification sessions:
+1. request classification
+2. clarification when needed
+3. plan generation plus mechanical validation
+4. optional plan review and revision loop
 
-```sql
-CREATE TABLE IF NOT EXISTS clarifications (
-    id INTEGER PRIMARY KEY,
-    task TEXT NOT NULL,
-    status TEXT DEFAULT 'active',  -- active, ready, abandoned
-    ambiguity_score REAL DEFAULT 1.0,  -- 0.0 = fully clear, 1.0 = fully ambiguous
-    threshold REAL DEFAULT 0.20,  -- readiness threshold
-    rounds INTEGER DEFAULT 0,
-    max_rounds INTEGER DEFAULT 12,
-    spec TEXT,  -- crystallized spec (markdown), written when status='ready'
-    dimensions TEXT DEFAULT '{}',  -- JSON: {intent, outcome, scope, constraints, success_criteria}
-    transcript TEXT DEFAULT '[]',  -- JSON array of {round, question, answer, dimension, score_delta}
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-```
+### Request Classification
 
-### 2. Ambiguity scoring
+Before invoking heavy planning, classify the task:
 
-Score is a weighted average across 5 dimensions, each scored 0.0–1.0:
+- `trivial`: execute directly or with minimal planning
+- `simple`: lightweight plan
+- `complex`: full planning and review pipeline
 
-| Dimension | Weight | What it measures |
-|-----------|--------|-----------------|
-| Intent | 0.30 | What the user actually wants to achieve |
-| Outcome | 0.25 | What "done" looks like, measurable success criteria |
-| Scope | 0.20 | What's in and out of scope, explicit non-goals |
-| Constraints | 0.15 | Technical/resource/timeline constraints |
-| Success criteria | 0.10 | How to verify the result is correct |
+Classification should be heuristic-first and fast, with override flags such as `--plan-depth`.
 
-Scoring is delegated: after each user answer, a `reason` delegate scores the updated dimensions given the full transcript. This avoids baking scoring heuristics into C code.
+### Clarification
 
-### 3. Clarification loop
+For vague tasks, run a structured clarification flow with:
 
-Implement `agent_clarify()` in a new `agent_clarify.c`:
+- persisted clarification state
+- ambiguity scoring
+- targeted questions against the weakest dimension
+- spec crystallization when clarity is good enough
 
-```c
-typedef struct {
-    int id;
-    char task[1024];
-    double ambiguity_score;
-    double threshold;
-    int rounds;
-    int max_rounds;
-    double dimensions[5];  // intent, outcome, scope, constraints, success
-    char status[16];
-} clarification_t;
+### Plan Validation
 
-int agent_clarify_start(app_ctx_t *ctx, const char *task, double threshold);
-int agent_clarify_round(app_ctx_t *ctx, int clar_id, const char *answer);
-int agent_clarify_score(app_ctx_t *ctx, int clar_id);  // delegate scoring
-int agent_clarify_crystallize(app_ctx_t *ctx, int clar_id);  // produce spec
-```
+After a plan is generated, run a mechanical validation pass:
 
-Each round:
-1. Identify the weakest dimension (highest ambiguity sub-score)
-2. Generate one targeted question for that dimension (via `reason` delegate with the transcript as context)
-3. Present the question to the user
-4. Record the answer in the transcript
-5. Re-score all dimensions via delegate
-6. If `ambiguity_score < threshold` → ready for handoff
-7. If `rounds >= max_rounds` → present current state, let user decide
+- referenced files exist
+- referenced symbols exist
+- tasks have enough starting context
+- contradictions or obviously conflicting instructions are flagged
 
-### 4. Spec crystallization
+Mostly-valid plans should pass with warnings; clearly broken plans should be sent back for revision.
 
-When the clarification session reaches `ready`, crystallize a markdown spec:
+### Plan Review
 
-```markdown
-# Spec: <task summary>
+For complex plans, optionally run sequential multi-delegate review:
 
-## Intent
-<what the user wants>
+- architect/reviewer checks soundness and blocking counterarguments
+- critic/reason delegate evaluates completeness, testability, blast radius, and rollback
+- verdicts are recorded in the plan IR and fed back into plan revision
 
-## Outcome
-<definition of done>
-
-## Scope
-- In scope: ...
-- Out of scope: ...
-
-## Constraints
-- ...
-
-## Success Criteria
-- [ ] ...
-
-## Assumptions
-- ...
-
-## Source
-Clarification session #N, N rounds, ambiguity score: 0.18
-```
-
-This spec can be:
-- Stored as the `spec` column in the clarification row
-- Injected into session context when creating a plan
-- Fed directly to `agent_plan_create()` as the task description
-
-### 5. CLI commands
+### CLI and MCP
 
 ```bash
-aimee clarify "vague task description"           # start interactive clarification
-aimee clarify "task" --quick                      # max 5 rounds, threshold 0.30
-aimee clarify "task" --deep                       # max 20 rounds, threshold 0.15
-aimee clarify status <id>                         # show current dimensions and score
-aimee clarify spec <id>                           # output the crystallized spec
+aimee clarify "vague task description"
+aimee clarify status <id>
+aimee clarify spec <id>
+aimee plan review <plan_id>
 ```
 
-### 6. MCP tools
+MCP tools:
 
-```json
-{
-  "name": "clarify_start",
-  "description": "Start a structured clarification session for an ambiguous task",
-  "parameters": {
-    "task": "string",
-    "threshold": "number (default 0.20)",
-    "max_rounds": "number (default 12)"
-  }
-}
-```
-
-```json
-{
-  "name": "clarify_answer",
-  "description": "Submit an answer to the current clarification question",
-  "parameters": {
-    "clarification_id": "integer",
-    "answer": "string"
-  }
-}
-```
-
-### 7. Integration with plan mode
-
-When `aimee plan` is active and the primary agent creates a plan, the PreToolUse hook can check whether the task has a completed clarification session. If not, and the task description is short/vague (heuristic: <50 words, no file paths or function names), suggest clarification before planning.
-
-This is advisory, not blocking — the agent can proceed without clarification for concrete tasks.
+- `clarify_start`
+- `clarify_answer`
+- `review_plan`
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/agent_clarify.c` | New: clarification loop, scoring delegation, spec crystallization |
-| `src/headers/agent_clarify.h` | New: clarification types and function declarations |
-| `src/cmd_core.c` | Add `clarify` subcommand routing |
-| `src/mcp_tools.c` | Add `clarify_start` and `clarify_answer` MCP tools |
-| `src/mcp_server.c` | Register new tools |
-| `src/cmd_hooks.c` | Advisory check in PreToolUse: suggest clarification for vague plans |
-| `src/db.c` | Add `clarifications` table migration |
-| `src/tests/test_clarify.c` | Tests for scoring, round progression, crystallization |
+| `src/agent_clarify.c` | Clarification loop, scoring delegation, spec crystallization |
+| `src/agent_plan.c` | Request classification, plan validation, and review integration |
+| `src/headers/agent_clarify.h` | Clarification types and declarations |
+| `src/headers/agent_plan.h` | Classification, validation, and review state/types |
+| `src/cmd_core.c` | `clarify` and plan-review command routing |
+| `src/mcp_tools.c` | Clarification and plan-review MCP tools |
+| `src/db.c` | Clarification storage plus plan review metadata |
 
 ## Acceptance Criteria
 
-- [ ] `aimee clarify "task"` starts an interactive session and asks targeted questions
-- [ ] Each round targets the weakest ambiguity dimension
-- [ ] Ambiguity score decreases as answers are provided
-- [ ] Session reaches `ready` when score drops below threshold
-- [ ] `aimee clarify spec <id>` outputs a structured markdown spec
-- [ ] Clarification state persists across sessions (DB-backed)
-- [ ] `clarify_start` and `clarify_answer` MCP tools are callable
-- [ ] Scoring uses delegate routing (cheapest `reason`-capable delegate)
-- [ ] Fallback: if no delegate available, skip scoring and use round count as the only gate
+- [ ] Vague tasks can enter a structured clarification flow with persisted ambiguity scoring.
+- [ ] Trivial tasks can skip heavyweight planning based on fast classification.
+- [ ] Plans with invalid file or symbol references are flagged before execution.
+- [ ] Complex plans can be contested and revised through review before implementation.
+- [ ] Clarified specs can feed directly into plan creation.
+- [ ] Planning depth remains overrideable by the user.
 
 ## Owner and Effort
 
 - **Owner:** aimee
-- **Effort:** L (4-6 focused sessions)
-- **Dependencies:** None, though composes well with consensus-planning proposal
+- **Effort:** L
+- **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** New table, new commands. No changes to existing behavior. Clarification is opt-in.
-- **Rollback:** Revert commit. Drop `clarifications` table. No impact on existing data.
-- **Blast radius:** None — entirely additive. Existing plan and delegate workflows are unchanged.
+- **Rollout:** Start with classification + clarification, then add validation, then add review gates for complex plans only.
+- **Rollback:** Each stage can degrade independently to simpler planning behavior.
+- **Blast radius:** Medium. This changes how and when plans are accepted for execution.
 
 ## Test Plan
 
-- [ ] Unit tests: ambiguity score calculation from dimension sub-scores
-- [ ] Unit tests: round progression — question targets weakest dimension
-- [ ] Unit tests: crystallization produces valid markdown spec
-- [ ] Unit tests: threshold gate — session transitions to `ready` at correct score
-- [ ] Integration tests: end-to-end clarify → spec → plan create
-- [ ] Failure injection: delegate unavailable during scoring — graceful fallback to round-count gate
-- [ ] Manual verification: run `aimee clarify` on a vague task, observe questions improve specificity
+- [ ] Unit tests: request classification and planning-depth overrides
+- [ ] Unit tests: ambiguity scoring state transitions
+- [ ] Unit tests: plan validation for missing files/symbols and vague tasks
+- [ ] Unit tests: review iteration and verdict recording
+- [ ] Integration tests: vague task → clarification → plan → validation → review
 
 ## Operational Impact
 
-- **Metrics:** `clarification_sessions_started`, `clarification_rounds_total`, `clarification_sessions_completed`, `clarification_avg_score_at_handoff`
-- **Logging:** Round progress to stderr: `aimee: clarify #N round 3/12, score 0.45 (intent=0.2, outcome=0.7, scope=0.5, ...)`
+- **Metrics:** request complexity distribution, clarification rounds, plan validation failures, plan review verdicts
+- **Logging:** classification, clarification readiness, validation warnings, review verdicts
 - **Alerts:** None
-- **Disk/CPU/Memory:** 1-2 delegate calls per round (question generation + scoring). Transcript stored as JSON, typically <10KB per session.
+- **Disk/CPU/Memory:** Extra delegate calls only for clarification scoring and complex plan review
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Clarification table + loop | P1 | M | High — core mechanism |
-| Delegate-based scoring | P1 | S | High — makes scores meaningful |
-| Spec crystallization | P1 | S | High — connects to plan creation |
-| CLI commands | P2 | S | Medium — user interface |
-| MCP tools | P2 | S | Medium — agent-callable |
-| Plan mode advisory hook | P3 | S | Low — nice-to-have nudge |
+| Classification + clarification | P1 | M | High |
+| Plan validation | P1 | S | High |
+| Plan review loop | P1 | M | High |
 
 ## Trade-offs
 
-**Why delegate scoring instead of heuristic scoring in C?**
-Heuristic scoring (keyword matching, answer length) would be brittle and low-quality. A delegate with the full transcript can genuinely assess whether ambiguity has been resolved. The cost is 1 cheap delegate call per round — acceptable given the tokens saved by avoiding misaligned implementations.
-
-**Why not use the existing memory system for clarification state?**
-Clarification sessions have structured state (dimensions, scores, transcripts) that doesn't fit the key-value memory model. A dedicated table is cleaner and supports efficient queries like "find the clarification session for this task."
-
-**Why advisory rather than mandatory before planning?**
-Many tasks are concrete enough to plan directly ("fix the null pointer in memory.c line 42"). Mandatory clarification for those would be friction without value. The heuristic (short description, no concrete anchors) catches the cases that genuinely need it.
-
-**Why not just ask the user to write a better prompt?**
-The interview process *helps the user discover what they don't know they don't know*. Each question is targeted at a specific blind spot. This is more effective than "please be more specific."
+- **Why merge these planning proposals?** Clarification, depth selection, validation, and review are successive gates on the same planning artifact.
+- **Why keep clarification advisory for concrete tasks?** For obvious small tasks, forcing a clarification loop would be overhead.
+- **Why validate mechanically before delegate review?** Cheap reference validation catches the easiest failures first.
