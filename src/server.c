@@ -253,7 +253,7 @@ static int handle_hooks_pre(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 
    /* Build response */
    cJSON *resp = cJSON_CreateObject();
-   cJSON_AddStringToObject(resp, "status", rc == 0 ? "ok" : "blocked");
+   cJSON_AddStringToObject(resp, "status", rc == 2 ? "blocked" : "ok");
    cJSON_AddNumberToObject(resp, "exit_code", rc);
    if (msg[0])
       cJSON_AddStringToObject(resp, "message", msg);
