@@ -171,20 +171,14 @@ int g_config_strict;
 
 /* --- Config schema --- */
 
-static const config_schema_entry_t config_schema[] = {{"db_path", SCHEMA_STRING, 0},
-                                                      {"guardrail_mode", SCHEMA_STRING, 0},
-                                                      {"provider", SCHEMA_STRING, 0},
-                                                      {"use_builtin_cli", SCHEMA_BOOL, 0},
-                                                      {"openai_endpoint", SCHEMA_STRING, 0},
-                                                      {"openai_model", SCHEMA_STRING, 0},
-                                                      {"openai_key_cmd", SCHEMA_STRING, 0},
-                                                      {"embedding_command", SCHEMA_STRING, 0},
-                                                      {"workspace_root", SCHEMA_STRING, 0},
-                                                      {"workspaces", SCHEMA_ARRAY, 0},
-                                                      {"autonomous", SCHEMA_BOOL, 0},
-                                                      {"cross_verify", SCHEMA_OBJECT, 0},
-                                                      {"retry", SCHEMA_OBJECT, 0},
-                                                      {NULL, 0, 0}};
+static const config_schema_entry_t config_schema[] = {
+    {"db_path", SCHEMA_STRING, 0},         {"guardrail_mode", SCHEMA_STRING, 0},
+    {"provider", SCHEMA_STRING, 0},        {"use_builtin_cli", SCHEMA_BOOL, 0},
+    {"openai_endpoint", SCHEMA_STRING, 0}, {"openai_model", SCHEMA_STRING, 0},
+    {"openai_key_cmd", SCHEMA_STRING, 0},  {"embedding_command", SCHEMA_STRING, 0},
+    {"workspace_root", SCHEMA_STRING, 0},  {"workspaces", SCHEMA_ARRAY, 0},
+    {"autonomous", SCHEMA_BOOL, 0},        {"cross_verify", SCHEMA_OBJECT, 0},
+    {"retry", SCHEMA_OBJECT, 0},           {NULL, 0, 0}};
 
 static const char *schema_type_name(schema_type_t t)
 {
