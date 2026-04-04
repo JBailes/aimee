@@ -325,7 +325,10 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
             {
                fprintf(stderr, "aimee: mcp git: redirecting from %s to worktree %s\n", cwd, wt);
                if (chdir(wt) == 0)
+               {
                   did_chdir = 1;
+                  mcp_git_set_worktree(1);
+               }
             }
          }
       }
@@ -363,6 +366,8 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
       content = handle_git_reset(args);
    else if (strcmp(tool, "git_restore") == 0)
       content = handle_git_restore(args);
+
+   mcp_git_set_worktree(0);
 
    if (did_chdir && git_old_cwd[0])
       chdir(git_old_cwd);

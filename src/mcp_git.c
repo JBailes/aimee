@@ -14,6 +14,20 @@
 #define GIT_BUF_SIZE 65536
 #define SUMMARY_MAX  4096
 
+/* --- Worktree context --- */
+
+static _Thread_local int s_in_worktree = 0;
+
+void mcp_git_set_worktree(int in_worktree)
+{
+   s_in_worktree = in_worktree;
+}
+
+int mcp_git_in_worktree(void)
+{
+   return s_in_worktree;
+}
+
 /* --- Helpers --- */
 
 static cJSON *mcp_text(const char *text)
@@ -128,6 +142,35 @@ static int branch_own_check(const char *branch, char *owner_out, size_t owner_le
    }
    /* No owner recorded or owned by current session = allowed */
    return 1;
+}
+
+/* Look up the most recently owned branch for the current session.
+ * Returns 0 on success (buf filled), -1 if none found. */
+static int branch_own_get_session(char *buf, size_t len)
+{
+   sqlite3 *db = mcp_db_get();
+   if (!db)
+      return -1;
+   char repo[MAX_PATH_LEN];
+   if (get_repo_path(repo, sizeof(repo)) != 0)
+      return -1;
+   sqlite3_stmt *st = db_prepare(db, "SELECT branch_name FROM branch_ownership "
+                                     "WHERE repo_path = ? AND session_id = ? "
+                                     "ORDER BY rowid DESC LIMIT 1");
+   if (!st)
+      return -1;
+   sqlite3_bind_text(st, 1, repo, -1, SQLITE_TRANSIENT);
+   sqlite3_bind_text(st, 2, session_id(), -1, SQLITE_TRANSIENT);
+   if (sqlite3_step(st) == SQLITE_ROW)
+   {
+      const char *name = (const char *)sqlite3_column_text(st, 0);
+      if (name && name[0])
+      {
+         snprintf(buf, len, "%s", name);
+         return 0;
+      }
+   }
+   return -1;
 }
 
 /* Get current branch name into buf. Returns 0 on success. */
@@ -466,21 +509,34 @@ cJSON *handle_git_push(cJSON *args)
       return mcp_text(result);
    }
 
-   /* Get current branch */
+   /* Get current branch -- in a worktree, also look up the session's owned branch */
    int rc;
-   char *branch_out = run_cmd("git rev-parse --abbrev-ref HEAD 2>&1", &rc);
-   if (rc != 0 || !branch_out)
+   char branch[256] = "";
+
+   if (mcp_git_in_worktree())
    {
-      cJSON *r = mcp_text("error: not on a branch");
-      free(branch_out);
-      return r;
+      /* In a worktree, HEAD is the session branch. Look up the owned branch. */
+      if (branch_own_get_session(branch, sizeof(branch)) != 0)
+         get_current_branch(branch, sizeof(branch)); /* fallback */
    }
-   char *nl = strchr(branch_out, '\n');
-   if (nl)
-      *nl = '\0';
-   char branch[256];
-   snprintf(branch, sizeof(branch), "%s", branch_out);
-   free(branch_out);
+   else
+   {
+      char *branch_out = run_cmd("git rev-parse --abbrev-ref HEAD 2>&1", &rc);
+      if (rc != 0 || !branch_out)
+      {
+         cJSON *r = mcp_text("error: not on a branch");
+         free(branch_out);
+         return r;
+      }
+      char *nl = strchr(branch_out, '\n');
+      if (nl)
+         *nl = '\0';
+      snprintf(branch, sizeof(branch), "%s", branch_out);
+      free(branch_out);
+   }
+
+   if (!branch[0])
+      return mcp_text("error: could not determine branch to push");
 
    /* Branch ownership check */
    {
@@ -536,24 +592,36 @@ cJSON *handle_git_push(cJSON *args)
       }
    }
 
-   /* Check if upstream exists */
-   char *upstream = run_cmd("git rev-parse --abbrev-ref @{upstream} 2>&1", &rc);
-   int has_upstream = (rc == 0);
-   free(upstream);
-
-   /* Build push command */
+   /* Build push command -- always push by explicit refspec in worktree mode */
    char cmd[512];
-   if (has_upstream)
+   if (mcp_git_in_worktree())
    {
+      /* In worktree: push the named branch (which may not be HEAD) */
+      char *esc_branch = shell_escape(branch);
       if (force)
-         snprintf(cmd, sizeof(cmd), "git push --force-with-lease 2>&1");
+         snprintf(cmd, sizeof(cmd), "git push --force-with-lease origin '%s' 2>&1", esc_branch);
       else
-         snprintf(cmd, sizeof(cmd), "git push 2>&1");
+         snprintf(cmd, sizeof(cmd), "git push -u origin '%s' 2>&1", esc_branch);
+      free(esc_branch);
    }
    else
    {
-      /* No upstream: push current branch to origin and set upstream */
-      snprintf(cmd, sizeof(cmd), "git push -u origin '%s' 2>&1", branch);
+      /* Check if upstream exists */
+      char *upstream = run_cmd("git rev-parse --abbrev-ref @{upstream} 2>&1", &rc);
+      int has_upstream = (rc == 0);
+      free(upstream);
+
+      if (has_upstream)
+      {
+         if (force)
+            snprintf(cmd, sizeof(cmd), "git push --force-with-lease 2>&1");
+         else
+            snprintf(cmd, sizeof(cmd), "git push 2>&1");
+      }
+      else
+      {
+         snprintf(cmd, sizeof(cmd), "git push -u origin '%s' 2>&1", branch);
+      }
    }
 
    char *out = run_cmd(cmd, &rc);
@@ -565,12 +633,16 @@ cJSON *handle_git_push(cJSON *args)
    }
    free(out);
 
-   /* Get the commit hash we pushed */
-   char *hash_out = run_cmd("git rev-parse --short HEAD 2>&1", &rc);
+   /* Get the commit hash of the branch we pushed */
+   char *esc_br = shell_escape(branch);
+   char hash_cmd[512];
+   snprintf(hash_cmd, sizeof(hash_cmd), "git rev-parse --short '%s' 2>&1", esc_br);
+   free(esc_br);
+   char *hash_out = run_cmd(hash_cmd, &rc);
    char hash[16] = "";
    if (hash_out)
    {
-      nl = strchr(hash_out, '\n');
+      char *nl = strchr(hash_out, '\n');
       if (nl)
          *nl = '\0';
       snprintf(hash, sizeof(hash), "%s", hash_out);
@@ -627,15 +699,35 @@ cJSON *handle_git_branch(cJSON *args)
    {
       cJSON *jbase = cJSON_GetObjectItemCaseSensitive(args, "base");
       char cmd[1024];
-      if (cJSON_IsString(jbase) && jbase->valuestring[0])
+
+      /* In a worktree, create the branch without switching to it.
+       * Worktrees are session-scoped and must stay on their session branch.
+       * Use 'git branch <name>' instead of 'git checkout -b <name>'. */
+      if (mcp_git_in_worktree())
       {
-         char *esc_base = shell_escape(jbase->valuestring);
-         snprintf(cmd, sizeof(cmd), "git checkout -b '%s' '%s' 2>&1", esc_name, esc_base);
-         free(esc_base);
+         if (cJSON_IsString(jbase) && jbase->valuestring[0])
+         {
+            char *esc_base = shell_escape(jbase->valuestring);
+            snprintf(cmd, sizeof(cmd), "git branch '%s' '%s' 2>&1", esc_name, esc_base);
+            free(esc_base);
+         }
+         else
+         {
+            snprintf(cmd, sizeof(cmd), "git branch '%s' HEAD 2>&1", esc_name);
+         }
       }
       else
       {
-         snprintf(cmd, sizeof(cmd), "git checkout -b '%s' 2>&1", esc_name);
+         if (cJSON_IsString(jbase) && jbase->valuestring[0])
+         {
+            char *esc_base = shell_escape(jbase->valuestring);
+            snprintf(cmd, sizeof(cmd), "git checkout -b '%s' '%s' 2>&1", esc_name, esc_base);
+            free(esc_base);
+         }
+         else
+         {
+            snprintf(cmd, sizeof(cmd), "git checkout -b '%s' 2>&1", esc_name);
+         }
       }
 
       int rc;
@@ -649,8 +741,10 @@ cJSON *handle_git_branch(cJSON *args)
       }
       free(out);
 
-      /* Get current commit hash */
-      char *hash_out = run_cmd("git rev-parse --short HEAD 2>&1", &rc);
+      /* Get the commit hash the branch points to */
+      char hash_cmd[512];
+      snprintf(hash_cmd, sizeof(hash_cmd), "git rev-parse --short '%s' 2>&1", esc_name);
+      char *hash_out = run_cmd(hash_cmd, &rc);
       char hash[16] = "";
       if (hash_out)
       {
@@ -665,14 +759,29 @@ cJSON *handle_git_branch(cJSON *args)
       branch_own_register(jname->valuestring);
 
       char result[512];
-      snprintf(result, sizeof(result), "created: %s (%s)\nswitched to %s\nowner: %s",
-               jname->valuestring, hash, jname->valuestring, session_id());
+      if (mcp_git_in_worktree())
+         snprintf(result, sizeof(result),
+                  "created: %s (%s)\nowner: %s\n(worktree: branch created without checkout)",
+                  jname->valuestring, hash, session_id());
+      else
+         snprintf(result, sizeof(result), "created: %s (%s)\nswitched to %s\nowner: %s",
+                  jname->valuestring, hash, jname->valuestring, session_id());
       free(esc_name);
       return mcp_text(result);
    }
 
    if (strcmp(action, "switch") == 0)
    {
+      /* Block branch switching inside worktrees -- worktrees are session-scoped
+       * and must remain on their session branch. */
+      if (mcp_git_in_worktree())
+      {
+         free(esc_name);
+         return mcp_text("error: cannot switch branches inside a worktree. "
+                         "Worktrees are session-scoped. Use git_branch action=create "
+                         "to create a new branch (without checkout), then push/PR from it.");
+      }
+
       char cmd[512];
       snprintf(cmd, sizeof(cmd), "git checkout '%s' 2>&1", esc_name);
       int rc;
@@ -1083,21 +1192,26 @@ cJSON *handle_git_pr(cJSON *args)
 
    if (strcmp(action, "create") == 0)
    {
+      /* Resolve the branch to use for the PR head.
+       * In a worktree, HEAD is the session branch -- we need the owned branch instead. */
+      char head_branch[256] = "";
+      if (mcp_git_in_worktree())
+         branch_own_get_session(head_branch, sizeof(head_branch));
+      if (!head_branch[0])
+         get_current_branch(head_branch, sizeof(head_branch));
+
       /* Branch ownership check */
+      if (head_branch[0])
       {
-         char br[256];
-         if (get_current_branch(br, sizeof(br)) == 0)
+         char owner[64];
+         if (!branch_own_check(head_branch, owner, sizeof(owner)))
          {
-            char owner[64];
-            if (!branch_own_check(br, owner, sizeof(owner)))
-            {
-               char err[512];
-               snprintf(err, sizeof(err),
-                        "pr create blocked: branch '%s' is owned by session %.20s. "
-                        "Use git_branch action=claim to take ownership.",
-                        br, owner);
-               return mcp_text(err);
-            }
+            char err[512];
+            snprintf(err, sizeof(err),
+                     "pr create blocked: branch '%s' is owned by session %.20s. "
+                     "Use git_branch action=claim to take ownership.",
+                     head_branch, owner);
+            return mcp_text(err);
          }
       }
 
@@ -1129,9 +1243,22 @@ cJSON *handle_git_pr(cJSON *args)
       const char *base = cJSON_IsString(jbase) ? jbase->valuestring : "main";
       char *esc_base = shell_escape(base);
 
+      /* In worktree mode, explicitly specify --head so gh doesn't use the
+       * session branch (which is HEAD in the worktree) */
       char cmd[8192];
-      snprintf(cmd, sizeof(cmd), "gh pr create --title '%s' --body '%s' --base '%s' 2>&1",
-               esc_title, esc_body, esc_base);
+      if (head_branch[0] && mcp_git_in_worktree())
+      {
+         char *esc_head = shell_escape(head_branch);
+         snprintf(cmd, sizeof(cmd),
+                  "gh pr create --title '%s' --body '%s' --base '%s' --head '%s' 2>&1", esc_title,
+                  esc_body, esc_base, esc_head);
+         free(esc_head);
+      }
+      else
+      {
+         snprintf(cmd, sizeof(cmd), "gh pr create --title '%s' --body '%s' --base '%s' 2>&1",
+                  esc_title, esc_body, esc_base);
+      }
       free(esc_title);
       free(esc_body);
       free(esc_base);
@@ -1153,8 +1280,8 @@ cJSON *handle_git_pr(cJSON *args)
          size_t len = strlen(out);
          while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
             out[--len] = '\0';
-         snprintf(result, sizeof(result), "created: \"%s\"\nurl: %s\nbase: %s", jtitle->valuestring,
-                  out, base);
+         snprintf(result, sizeof(result), "created: \"%s\"\nurl: %s\nbase: %s\nhead: %s",
+                  jtitle->valuestring, out, base, head_branch[0] ? head_branch : "(current)");
       }
       else
       {
