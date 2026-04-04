@@ -658,8 +658,7 @@ static void test_compact_mixed_roles(void)
        cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 0), "content"));
    assert(strcmp(c0, "u1\n\nu2") == 0);
 
-   const char *r1 =
-       cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 1), "role"));
+   const char *r1 = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(arr, 1), "role"));
    assert(strcmp(r1, "assistant") == 0);
 
    const char *c2 =
