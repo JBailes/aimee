@@ -30,7 +30,8 @@ TEST_TARGETS = tests/unit-test-util tests/unit-test-db tests/unit-test-rules \
                tests/unit-test-client-integrations tests/unit-test-mcp-git \
                tests/unit-test-platform-process \
                tests/unit-test-dstr \
-               tests/unit-test-http-retry
+               tests/unit-test-http-retry \
+               tests/unit-test-cmd-doctor
 
 unit-tests: $(BINARY) $(TEST_TARGETS)
 	@for t in $(TEST_TARGETS); do echo "  $$t"; ./$$t || exit 1; done
@@ -245,6 +246,21 @@ tests/unit-test-dstr: $(OBJDIR)/tests/test_dstr.o $(OBJDIR)/dstr.o
 
 tests/unit-test-http-retry: $(OBJDIR)/tests/test_http_retry.o $(OBJDIR)/http_retry.o \
                             $(OBJDIR)/agent_http.o $(TEST_CORE_OBJS)
+	$(CC) -o $@ $^ $(TEST_L_FLAGS)
+
+tests/unit-test-cmd-doctor: $(OBJDIR)/tests/test_cmd_doctor.o $(OBJDIR)/cmd_doctor.o \
+                            $(OBJDIR)/cmd_util.o $(TEST_DATA_OBJS) \
+                            $(OBJDIR)/workspace.o $(OBJDIR)/working_memory.o \
+                            $(OBJDIR)/agent_config.o $(OBJDIR)/cmd_describe.o \
+                            $(OBJDIR)/client_integrations.o $(OBJDIR)/secret_store.o \
+                            $(OBJDIR)/mcp_git.o $(OBJDIR)/git_verify.o \
+                            $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o \
+                            $(OBJDIR)/agent.o $(OBJDIR)/agent_protocol.o \
+                            $(OBJDIR)/agent_policy.o $(OBJDIR)/agent_context.o \
+                            $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o \
+                            $(OBJDIR)/agent_coord.o $(OBJDIR)/agent_jobs.o \
+                            $(OBJDIR)/agent_tools.o $(OBJDIR)/agent_http.o \
+                            $(OBJDIR)/http_retry.o $(OBJDIR)/agent_tunnel.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
 
 $(OBJDIR)/tests/%.o: tests/%.c

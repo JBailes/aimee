@@ -613,10 +613,17 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
             *last_slash = '\0';
       }
 
+      /* For shell commands, also check if the command string itself targets a
+       * worktree. This handles "cd /path/.aimee-foo-sid/src && make" where cwd
+       * is the real repo but the command operates inside the worktree. */
+      int cmd_targets_worktree = 0;
+      if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd))
+         cmd_targets_worktree = is_aimee_worktree_path(cmd->valuestring);
+
       char git_root_buf[MAX_PATH_LEN];
       if (target_dir[0] == '/' &&
           git_repo_root(target_dir, git_root_buf, sizeof(git_root_buf)) == 0 &&
-          !is_aimee_worktree_path(target))
+          !is_aimee_worktree_path(target) && !cmd_targets_worktree)
       {
          const char *sid = session_id();
          char wt_path[MAX_PATH_LEN];
@@ -656,6 +663,19 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
                }
             }
 
+            /* For edit tools, silently rewrite the file_path to the worktree */
+            if (is_edit_tool(tool_name) && fp && cJSON_IsString(fp))
+            {
+               size_t gr_len = strlen(git_root_buf);
+               char rewritten[MAX_PATH_LEN];
+               snprintf(rewritten, sizeof(rewritten), "%s%s", wt_path, target + gr_len);
+               fprintf(stderr, "aimee: worktree rewrite: %s -> %s\n", target, rewritten);
+               snprintf(msg_buf, msg_len, "%s", rewritten);
+               cJSON_Delete(root);
+               return 1; /* allow with path rewrite */
+            }
+
+            /* For bash write commands, still block (can't reliably rewrite shell paths) */
             fprintf(stderr, "aimee: worktree redirect: %s -> %s\n", target, wt_path);
             snprintf(msg_buf, msg_len, "BLOCKED: write to real repo path. Use worktree instead: %s",
                      wt_path);
