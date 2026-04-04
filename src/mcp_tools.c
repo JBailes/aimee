@@ -261,12 +261,12 @@ cJSON *mcp_build_tools_list(void)
                               "Push with --mirror: replaces ALL remote refs with local refs. "
                               "Deletes remote branches that don't exist locally. "
                               "DESTRUCTIVE — only use when explicitly requested.");
-      cJSON_AddItemToArray(
-          tools, build_tool("git_push",
-                            "Push current branch to origin. Sets upstream on first push. "
-                            "Use mirror=true to sync all refs (destructive). "
-                            "Use instead of 'git push' via Bash.",
-                            s));
+      cJSON_AddItemToArray(tools,
+                           build_tool("git_push",
+                                      "Push current branch to origin. Sets upstream on first "
+                                      "push. Use mirror=true to sync all refs (destructive). "
+                                      "Use instead of 'git push' via Bash.",
+                                      s));
    }
 
    /* git_verify */
@@ -274,11 +274,12 @@ cJSON *mcp_build_tools_list(void)
       cJSON *s = cJSON_CreateObject();
       cJSON_AddStringToObject(s, "type", "object");
       cJSON_AddObjectToObject(s, "properties");
-      cJSON_AddItemToArray(
-          tools, build_tool("git_verify",
-                            "Run project verification steps (build, test, lint, etc.) defined "
-                            "in .aimee/project.yaml. Returns pass/fail per step with timing.",
-                            s));
+      cJSON_AddItemToArray(tools,
+                           build_tool("git_verify",
+                                      "Run project verification steps (build, test, lint, etc.) "
+                                      "defined in .aimee/project.yaml. Returns pass/fail per "
+                                      "step with timing.",
+                                      s));
    }
 
    /* git_branch */

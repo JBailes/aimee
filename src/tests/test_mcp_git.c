@@ -459,8 +459,7 @@ static void test_push_allowed_despite_other_session_ownership(void)
    assert(mkdtemp(remote_dir) != NULL);
 
    char cmd[1024];
-   snprintf(cmd, sizeof(cmd),
-            "git init -q --bare '%s' && cd '%s' && git remote add origin '%s'",
+   snprintf(cmd, sizeof(cmd), "git init -q --bare '%s' && cd '%s' && git remote add origin '%s'",
             remote_dir, g_tmpdir, remote_dir);
    assert(system(cmd) == 0);
 
