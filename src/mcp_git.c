@@ -2,6 +2,7 @@
 #include "aimee.h"
 #include "cJSON.h"
 #include "headers/guardrails.h"
+#include "headers/git_verify.h"
 #include "headers/util.h"
 #include <dirent.h>
 #include <stdio.h>
@@ -43,6 +44,50 @@ static cJSON *mcp_error(const char *fmt, const char *detail)
    char buf[1024];
    snprintf(buf, sizeof(buf), fmt, detail);
    return mcp_text(buf);
+}
+
+/* --- Merged-PR detection --- */
+
+/* Check if the current branch has a merged PR. Returns 1 if merged, 0 if not.
+ * Writes the branch name to branch_buf if provided. */
+static int check_branch_has_merged_pr(char *branch_buf, size_t branch_len)
+{
+   int rc;
+   char *branch = run_cmd("git rev-parse --abbrev-ref HEAD 2>/dev/null", &rc);
+   if (rc != 0 || !branch)
+   {
+      free(branch);
+      return 0;
+   }
+   char *nl = strchr(branch, '\n');
+   if (nl)
+      *nl = '\0';
+   if (branch_buf)
+      snprintf(branch_buf, branch_len, "%s", branch);
+
+   /* Skip check for default branches */
+   if (strcmp(branch, "main") == 0 || strcmp(branch, "master") == 0)
+   {
+      free(branch);
+      return 0;
+   }
+
+   char cmd[512];
+   snprintf(cmd, sizeof(cmd),
+            "gh pr list --head '%s' --state merged --json number --limit 1 2>/dev/null", branch);
+   free(branch);
+
+   char *out = run_cmd(cmd, &rc);
+   if (rc != 0 || !out)
+   {
+      free(out);
+      return 0; /* gh not available or failed -- don't block */
+   }
+
+   /* If output contains a number field, there's a merged PR */
+   int has_merged = (strstr(out, "\"number\"") != NULL);
+   free(out);
+   return has_merged;
 }
 
 /* --- Branch ownership --- */
@@ -420,6 +465,25 @@ cJSON *handle_git_commit(cJSON *args)
 
 cJSON *handle_git_push(cJSON *args)
 {
+   /* Merged-PR enforcement: block pushes to branches with merged PRs */
+   {
+      char branch[256];
+      if (check_branch_has_merged_pr(branch, sizeof(branch)))
+         return mcp_text("error: branch has a merged PR. Do not push to merged branches. "
+                         "Create a new branch for new work.");
+   }
+
+   /* Verify gate: require verification before pushing */
+   {
+      char verify_msg[256];
+      if (!verify_check(NULL, verify_msg, sizeof(verify_msg)))
+      {
+         char buf[512];
+         snprintf(buf, sizeof(buf), "error: verification required before push. %s", verify_msg);
+         return mcp_text(buf);
+      }
+   }
+
    cJSON *jforce = cJSON_GetObjectItemCaseSensitive(args, "force");
    int force = (jforce && cJSON_IsTrue(jforce)) ? 1 : 0;
 
@@ -1040,6 +1104,26 @@ cJSON *handle_git_pr(cJSON *args)
 
    if (strcmp(action, "create") == 0)
    {
+      /* Merged-PR enforcement: block creating PRs from branches with merged PRs */
+      {
+         char branch[256];
+         if (check_branch_has_merged_pr(branch, sizeof(branch)))
+            return mcp_text("error: branch already has a merged PR. "
+                            "Create a new branch for new work.");
+      }
+
+      /* Verify gate: require verification before creating PR */
+      {
+         char verify_msg[256];
+         if (!verify_check(NULL, verify_msg, sizeof(verify_msg)))
+         {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "error: verification required before creating PR. %s",
+                     verify_msg);
+            return mcp_text(buf);
+         }
+      }
+
       cJSON *jtitle = cJSON_GetObjectItemCaseSensitive(args, "title");
       cJSON *jbody = cJSON_GetObjectItemCaseSensitive(args, "body");
       cJSON *jbase = cJSON_GetObjectItemCaseSensitive(args, "base");

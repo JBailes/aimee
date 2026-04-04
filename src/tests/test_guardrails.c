@@ -138,13 +138,11 @@ static void test_session_state_worktrees(void)
    strcpy(state.session_mode, MODE_IMPLEMENT);
    strcpy(state.guardrail_mode, MODE_APPROVE);
 
-   /* Add worktree entries */
-   strcpy(state.worktrees[0].name, "wol");
-   strcpy(state.worktrees[0].path, "/tmp/test-wt/wol");
-   state.worktrees[0].created = 1;
-   strcpy(state.worktrees[1].name, "acktng");
-   strcpy(state.worktrees[1].path, "/tmp/test-wt/acktng");
-   state.worktrees[1].created = 1;
+   /* Add worktree mappings */
+   strcpy(state.worktrees[0].git_root, "/root/dev/wol");
+   strcpy(state.worktrees[0].worktree_path, "/root/dev/wol-abc12345");
+   strcpy(state.worktrees[1].git_root, "/root/dev/acktng");
+   strcpy(state.worktrees[1].worktree_path, "/root/dev/acktng-abc12345");
    state.worktree_count = 2;
 
    /* Save and reload */
@@ -154,102 +152,72 @@ static void test_session_state_worktrees(void)
    session_state_t loaded;
    session_state_load(&loaded, test_path);
    assert(loaded.worktree_count == 2);
-   assert(strcmp(loaded.worktrees[0].name, "wol") == 0);
-   assert(strcmp(loaded.worktrees[0].path, "/tmp/test-wt/wol") == 0);
-   assert(strcmp(loaded.worktrees[1].name, "acktng") == 0);
-   assert(strcmp(loaded.worktrees[1].path, "/tmp/test-wt/acktng") == 0);
+   assert(strcmp(loaded.worktrees[0].git_root, "/root/dev/wol") == 0);
+   assert(strcmp(loaded.worktrees[0].worktree_path, "/root/dev/wol-abc12345") == 0);
+   assert(strcmp(loaded.worktrees[1].git_root, "/root/dev/acktng") == 0);
+   assert(strcmp(loaded.worktrees[1].worktree_path, "/root/dev/acktng-abc12345") == 0);
 
    unlink(test_path);
 }
 
-static void test_worktree_blocks_writes(void)
+static void test_worktree_for_cwd(void)
 {
-   /* Create fake worktree directories so stat() checks pass */
-   system("mkdir -p /tmp/worktrees/abc/wol");
-
-   sqlite3 *db = db_open(":memory:");
    session_state_t state;
    memset(&state, 0, sizeof(state));
-   strcpy(state.session_mode, MODE_IMPLEMENT);
-   strcpy(state.guardrail_mode, MODE_APPROVE);
 
-   /* Set up a worktree for "wol" */
-   strcpy(state.worktrees[0].name, "wol");
-   strcpy(state.worktrees[0].path, "/tmp/worktrees/abc/wol");
-   state.worktrees[0].created = 1;
+   /* Set up worktree mapping */
+   strcpy(state.worktrees[0].git_root, "/root/dev/aimee");
+   strcpy(state.worktrees[0].worktree_path, "/root/dev/aimee-abc12345");
    state.worktree_count = 1;
 
-   /* The config needs a matching workspace for worktree_for_path to work.
-    * We test worktree_for_path directly instead. */
-   config_t cfg;
-   memset(&cfg, 0, sizeof(cfg));
-   strcpy(cfg.workspaces[0], "/root/aicli/wol");
-   cfg.workspace_count = 1;
-
-   /* Path inside workspace should match */
-   const char *wt = worktree_for_path(&state, &cfg, "/root/aicli/wol/src/Foo.cs");
+   /* CWD inside git root should match */
+   const char *wt = worktree_for_cwd(&state, "/root/dev/aimee/src/memory.c");
    assert(wt != NULL);
-   assert(strcmp(wt, "/tmp/worktrees/abc/wol") == 0);
+   assert(strcmp(wt, "/root/dev/aimee-abc12345") == 0);
 
-   /* Path outside workspace should not match */
-   wt = worktree_for_path(&state, &cfg, "/root/aicli/other/file.c");
+   /* CWD inside worktree should NOT match (already in worktree) */
+   wt = worktree_for_cwd(&state, "/root/dev/aimee-abc12345/src/memory.c");
+   assert(wt == NULL);
+
+   /* CWD outside git root should not match */
+   wt = worktree_for_cwd(&state, "/root/dev/other/file.c");
    assert(wt == NULL);
 
    /* No worktrees means no match */
    state.worktree_count = 0;
-   wt = worktree_for_path(&state, &cfg, "/root/aicli/wol/src/Foo.cs");
+   wt = worktree_for_cwd(&state, "/root/dev/aimee/src/memory.c");
    assert(wt == NULL);
-
-   db_stmt_cache_clear();
-   db_close(db);
-   system("rm -rf /tmp/worktrees");
 }
 
-static void test_worktree_prefers_specific_workspace(void)
+static void test_worktree_prefers_specific_git_root(void)
 {
-   /* Create fake worktree directories so stat() checks pass */
-   system("mkdir -p /tmp/worktrees/abc/dev /tmp/worktrees/abc/aimee");
-
-   sqlite3 *db = db_open(":memory:");
    session_state_t state;
    memset(&state, 0, sizeof(state));
-   strcpy(state.session_mode, MODE_IMPLEMENT);
-   strcpy(state.guardrail_mode, MODE_APPROVE);
 
-   /* Set up worktrees for both parent "dev" and child "aimee" */
-   strcpy(state.worktrees[0].name, "dev");
-   strcpy(state.worktrees[0].path, "/tmp/worktrees/abc/dev");
-   state.worktrees[0].created = 1;
-   strcpy(state.worktrees[1].name, "aimee");
-   strcpy(state.worktrees[1].path, "/tmp/worktrees/abc/aimee");
-   state.worktrees[1].created = 1;
+   /* Set up worktrees for both parent "dev" and child "dev/aimee" */
+   strcpy(state.worktrees[0].git_root, "/root/dev");
+   strcpy(state.worktrees[0].worktree_path, "/root/dev-abc12345");
+   strcpy(state.worktrees[1].git_root, "/root/dev/aimee");
+   strcpy(state.worktrees[1].worktree_path, "/root/dev/aimee-abc12345");
    state.worktree_count = 2;
 
-   config_t cfg;
-   memset(&cfg, 0, sizeof(cfg));
-   /* Parent directory listed first — used to incorrectly match first */
-   strcpy(cfg.workspaces[0], "/root/dev");
-   strcpy(cfg.workspaces[1], "/root/dev/aimee");
-   cfg.workspace_count = 2;
-
    /* Path inside /root/dev/aimee should match the aimee worktree, not dev */
-   const char *wt = worktree_for_path(&state, &cfg, "/root/dev/aimee/src/main.c");
+   const char *wt = worktree_for_cwd(&state, "/root/dev/aimee/src/main.c");
    assert(wt != NULL);
-   assert(strcmp(wt, "/tmp/worktrees/abc/aimee") == 0);
+   assert(strcmp(wt, "/root/dev/aimee-abc12345") == 0);
 
-   /* worktree_for_path_if_created should also prefer the specific match */
-   wt = worktree_for_path_if_created(&state, &cfg, "/root/dev/aimee/src/main.c");
+   /* Path directly inside /root/dev (not a child) should match dev */
+   wt = worktree_for_cwd(&state, "/root/dev/other/file.c");
    assert(wt != NULL);
-   assert(strcmp(wt, "/tmp/worktrees/abc/aimee") == 0);
+   assert(strcmp(wt, "/root/dev-abc12345") == 0);
+}
 
-   /* Path directly inside /root/dev (not a child workspace) should match dev */
-   wt = worktree_for_path(&state, &cfg, "/root/dev/other/file.c");
-   assert(wt != NULL);
-   assert(strcmp(wt, "/tmp/worktrees/abc/dev") == 0);
-
-   db_stmt_cache_clear();
-   db_close(db);
-   system("rm -rf /tmp/worktrees");
+static void test_worktree_sibling_path(void)
+{
+   char buf[MAX_PATH_LEN];
+   int rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", buf, sizeof(buf));
+   assert(rc == 0);
+   assert(strcmp(buf, "/root/dev/aimee-fadc648f") == 0);
 }
 
 /* --- Deeper edge case tests --- */
@@ -421,13 +389,11 @@ static void test_session_state_save_load_roundtrip(void)
    strcpy(original.session_mode, MODE_PLAN);
    strcpy(original.guardrail_mode, MODE_DENY);
    original.active_task_id = 42;
-   original.fetched_mask = 0x0F;
    strcpy(original.seen_paths[0], "/path/to/.env");
    strcpy(original.seen_paths[1], "/another/secret.key");
    original.seen_count = 2;
-   strcpy(original.worktrees[0].name, "proj");
-   strcpy(original.worktrees[0].path, "/wt/proj");
-   original.worktrees[0].created = 1;
+   strcpy(original.worktrees[0].git_root, "/root/proj");
+   strcpy(original.worktrees[0].worktree_path, "/root/proj-abc12345");
    original.worktree_count = 1;
 
    session_state_force_save(&original, path);
@@ -438,71 +404,41 @@ static void test_session_state_save_load_roundtrip(void)
    assert(strcmp(loaded.session_mode, MODE_PLAN) == 0);
    assert(strcmp(loaded.guardrail_mode, MODE_DENY) == 0);
    assert(loaded.active_task_id == 42);
-   assert(loaded.fetched_mask == 0x0F);
    assert(loaded.seen_count == 2);
    assert(strcmp(loaded.seen_paths[0], "/path/to/.env") == 0);
    assert(strcmp(loaded.seen_paths[1], "/another/secret.key") == 0);
    assert(loaded.worktree_count == 1);
-   assert(strcmp(loaded.worktrees[0].name, "proj") == 0);
+   assert(strcmp(loaded.worktrees[0].git_root, "/root/proj") == 0);
+   assert(strcmp(loaded.worktrees[0].worktree_path, "/root/proj-abc12345") == 0);
 
    unlink(path);
 }
 
-static void test_worktree_base_branch_roundtrip(void)
+static void test_worktree_mapping_roundtrip(void)
 {
-   const char *path = "/tmp/test-base-branch-rt.state";
+   const char *path = "/tmp/test-wt-mapping-rt.state";
 
    session_state_t state;
    memset(&state, 0, sizeof(state));
    strcpy(state.session_mode, MODE_IMPLEMENT);
    strcpy(state.guardrail_mode, MODE_APPROVE);
 
-   /* Set up a worktree with a cached base_branch */
-   strcpy(state.worktrees[0].name, "myrepo");
-   strcpy(state.worktrees[0].path, "/tmp/wt/myrepo");
-   strcpy(state.worktrees[0].workspace_root, "/home/user/myrepo");
-   strcpy(state.worktrees[0].base_branch, "origin/main");
-   state.worktrees[0].created = 1;
-   state.worktree_count = 1;
-
-   session_state_force_save(&state, path);
-
-   /* Reload and verify base_branch survived */
-   session_state_t loaded;
-   session_state_load(&loaded, path);
-   assert(loaded.worktree_count == 1);
-   assert(strcmp(loaded.worktrees[0].name, "myrepo") == 0);
-   assert(strcmp(loaded.worktrees[0].base_branch, "origin/main") == 0);
-   assert(strcmp(loaded.worktrees[0].workspace_root, "/home/user/myrepo") == 0);
-   assert(loaded.worktrees[0].created == 1);
-
-   unlink(path);
-}
-
-static void test_worktree_base_branch_empty_roundtrip(void)
-{
-   const char *path = "/tmp/test-base-branch-empty.state";
-
-   session_state_t state;
-   memset(&state, 0, sizeof(state));
-   strcpy(state.session_mode, MODE_IMPLEMENT);
-   strcpy(state.guardrail_mode, MODE_APPROVE);
-
-   /* Worktree with no cached base_branch (fresh, not yet resolved) */
-   strcpy(state.worktrees[0].name, "newrepo");
-   strcpy(state.worktrees[0].path, "/tmp/wt/newrepo");
-   strcpy(state.worktrees[0].workspace_root, "/home/user/newrepo");
-   state.worktrees[0].base_branch[0] = '\0';
-   state.worktrees[0].created = 0;
-   state.worktree_count = 1;
+   /* Set up worktree mappings */
+   strcpy(state.worktrees[0].git_root, "/home/user/myrepo");
+   strcpy(state.worktrees[0].worktree_path, "/home/user/myrepo-abc12345");
+   strcpy(state.worktrees[1].git_root, "/home/user/other");
+   strcpy(state.worktrees[1].worktree_path, "/home/user/other-abc12345");
+   state.worktree_count = 2;
 
    session_state_force_save(&state, path);
 
    session_state_t loaded;
    session_state_load(&loaded, path);
-   assert(loaded.worktree_count == 1);
-   assert(loaded.worktrees[0].base_branch[0] == '\0');
-   assert(loaded.worktrees[0].created == 0);
+   assert(loaded.worktree_count == 2);
+   assert(strcmp(loaded.worktrees[0].git_root, "/home/user/myrepo") == 0);
+   assert(strcmp(loaded.worktrees[0].worktree_path, "/home/user/myrepo-abc12345") == 0);
+   assert(strcmp(loaded.worktrees[1].git_root, "/home/user/other") == 0);
+   assert(strcmp(loaded.worktrees[1].worktree_path, "/home/user/other-abc12345") == 0);
 
    unlink(path);
 }
@@ -687,86 +623,42 @@ static void test_unknown_subagent_surface_blocked(void)
    db_close(db);
 }
 
-static void test_worktree_blocks_cd_into_workspace(void)
-{
-   /* Create fake worktree directory so stat() checks in worktree_for_path pass */
-   system("mkdir -p /tmp/worktrees/abc/aimee");
+/* Note: the new worktree enforcement uses git_repo_root() which requires a real
+ * git repo. These tests verify the worktree_for_cwd() lookup logic and
+ * worktree_sibling_path computation instead of the full pre_tool_check flow,
+ * since pre_tool_check's worktree enforcement depends on git_repo_root which
+ * is impractical to mock in unit tests. */
 
-   sqlite3 *db = db_open(":memory:");
+static void test_worktree_for_cwd_edge_cases(void)
+{
    session_state_t state;
    memset(&state, 0, sizeof(state));
-   strcpy(state.session_mode, MODE_IMPLEMENT);
-   strcpy(state.guardrail_mode, MODE_APPROVE);
 
-   /* Set up worktree for "aimee" */
-   strcpy(state.worktrees[0].name, "aimee");
-   strcpy(state.worktrees[0].path, "/tmp/worktrees/abc/aimee");
-   strcpy(state.worktrees[0].workspace_root, "/root/dev/aimee");
-   state.worktrees[0].created = 1;
+   /* Set up worktree mapping */
+   strcpy(state.worktrees[0].git_root, "/root/dev/aimee");
+   strcpy(state.worktrees[0].worktree_path, "/root/dev/aimee-abc12345");
    state.worktree_count = 1;
 
-   /* "cd /root/dev/aimee && rm -rf src" — cd target is in workspace */
-   char msg[1024] = "";
-   int rc = pre_tool_check(db, "Bash", "{\"command\":\"cd /root/dev/aimee && rm -rf src\"}", &state,
-                           MODE_APPROVE, "/tmp", msg, sizeof(msg));
-   assert(rc == 2);
-   assert(strstr(msg, "BLOCKED") != NULL);
+   /* Exact git root match */
+   const char *wt = worktree_for_cwd(&state, "/root/dev/aimee");
+   assert(wt != NULL);
+   assert(strcmp(wt, "/root/dev/aimee-abc12345") == 0);
 
-   /* "cd /root/dev/other && rm -rf src" — cd target is NOT in workspace */
-   msg[0] = '\0';
-   rc = pre_tool_check(db, "Bash", "{\"command\":\"cd /root/dev/other && rm -rf src\"}", &state,
-                       MODE_APPROVE, "/tmp", msg, sizeof(msg));
-   assert(rc == 0);
+   /* Subdirectory of git root */
+   wt = worktree_for_cwd(&state, "/root/dev/aimee/src/memory.c");
+   assert(wt != NULL);
 
-   /* "cd /root/dev/aimee/src && touch foo" — subdir of workspace */
-   msg[0] = '\0';
-   rc = pre_tool_check(db, "Bash", "{\"command\":\"cd /root/dev/aimee/src && touch foo\"}", &state,
-                       MODE_APPROVE, "/tmp", msg, sizeof(msg));
-   assert(rc == 2);
-   assert(strstr(msg, "BLOCKED") != NULL);
+   /* Already inside worktree — should return NULL */
+   wt = worktree_for_cwd(&state, "/root/dev/aimee-abc12345/src/memory.c");
+   assert(wt == NULL);
 
-   db_stmt_cache_clear();
-   db_close(db);
-   system("rm -rf /tmp/worktrees");
-}
+   /* Partial prefix match should NOT match (e.g. /root/dev/aimee2) */
+   wt = worktree_for_cwd(&state, "/root/dev/aimee2/src/foo.c");
+   assert(wt == NULL);
 
-static void test_worktree_blocks_edit_to_real_workspace(void)
-{
-   /* Create fake worktree directory so stat() checks in worktree_for_path pass */
-   system("mkdir -p /tmp/worktrees/abc/aimee");
-
-   sqlite3 *db = db_open(":memory:");
-   session_state_t state;
-   memset(&state, 0, sizeof(state));
-   strcpy(state.session_mode, MODE_IMPLEMENT);
-   strcpy(state.guardrail_mode, MODE_APPROVE);
-
-   strcpy(state.worktrees[0].name, "aimee");
-   strcpy(state.worktrees[0].path, "/tmp/worktrees/abc/aimee");
-   strcpy(state.worktrees[0].workspace_root, "/root/dev/aimee");
-   state.worktrees[0].created = 1;
-   state.worktree_count = 1;
-
-   /* Edit to real workspace path should be blocked */
-   char msg[1024] = "";
-   int rc = pre_tool_check(db, "Edit",
-                           "{\"file_path\":\"/root/dev/aimee/src/memory.c\","
-                           "\"old_string\":\"old\",\"new_string\":\"new\"}",
-                           &state, MODE_APPROVE, "/tmp", msg, sizeof(msg));
-   assert(rc == 2);
-   assert(strstr(msg, "BLOCKED") != NULL);
-
-   /* Edit to worktree path should be allowed */
-   msg[0] = '\0';
-   rc = pre_tool_check(db, "Edit",
-                       "{\"file_path\":\"/tmp/worktrees/abc/aimee/src/memory.c\","
-                       "\"old_string\":\"old\",\"new_string\":\"new\"}",
-                       &state, MODE_APPROVE, "/tmp", msg, sizeof(msg));
-   assert(rc == 0);
-
-   db_stmt_cache_clear();
-   db_close(db);
-   system("rm -rf /tmp/worktrees");
+   /* NULL state */
+   wt = worktree_for_cwd(NULL, "/root/dev/aimee/src/foo.c");
+   assert(wt == NULL);
 }
 
 static void test_hook_call_count_increments(void)
@@ -848,18 +740,17 @@ int main(void)
    test_canonical_tool_names();
    test_session_state_worktrees();
    test_session_state_save_load_roundtrip();
-   test_worktree_base_branch_roundtrip();
-   test_worktree_base_branch_empty_roundtrip();
+   test_worktree_mapping_roundtrip();
    test_app_ctx_cfg_pointer();
-   test_worktree_blocks_writes();
-   test_worktree_prefers_specific_workspace();
+   test_worktree_for_cwd();
+   test_worktree_prefers_specific_git_root();
+   test_worktree_sibling_path();
+   test_worktree_for_cwd_edge_cases();
    test_malformed_tool_payloads();
    test_anti_pattern_in_session_warning();
    test_anti_pattern_no_match_no_warning();
    test_known_subagent_tools_blocked();
    test_unknown_subagent_surface_blocked();
-   test_worktree_blocks_cd_into_workspace();
-   test_worktree_blocks_edit_to_real_workspace();
    test_hook_call_count_increments();
    test_no_worktree_allows_non_workspace_writes();
    printf("guardrails: all tests passed\n");

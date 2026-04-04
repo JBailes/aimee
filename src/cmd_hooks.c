@@ -913,22 +913,18 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
       }
    }
 
-   /* Build session state: compute worktree paths and fetched_mask before
-    * forking the prune child, so we can write the state file once. */
+   /* Build session state: compute sibling worktree paths for workspaces. */
    char state_path[MAX_PATH_LEN];
    session_state_path(state_path, sizeof(state_path));
    session_state_t state;
    memset(&state, 0, sizeof(state));
    snprintf(state.guardrail_mode, sizeof(state.guardrail_mode), "%s", config_guardrail_mode(&cfg));
 
-   /* Identify git workspaces that need worktrees.
-    * Worktree creation is deferred — paths are computed now but actual
-    * `git worktree add` happens lazily on first access via worktree_ensure(). */
+   /* Register sibling worktrees for configured workspaces and CWD's git repo. */
    const char *sid = session_id();
 
    for (int i = 0; i < cfg.workspace_count && state.worktree_count < MAX_WORKTREES; i++)
    {
-      /* Validate workspace root exists on disk before checking git status */
       struct stat ws_st;
       if (stat(cfg.workspaces[i], &ws_st) != 0 || !S_ISDIR(ws_st.st_mode))
       {
@@ -937,15 +933,55 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          continue;
       }
 
-      worktree_entry_init(&state, cfg.workspaces[i], sid);
+      char gr[MAX_PATH_LEN];
+      if (git_repo_root(cfg.workspaces[i], gr, sizeof(gr)) == 0)
+      {
+         /* Deduplicate by git_root */
+         int dup = 0;
+         for (int j = 0; j < state.worktree_count; j++)
+         {
+            if (strcmp(state.worktrees[j].git_root, gr) == 0)
+            {
+               dup = 1;
+               break;
+            }
+         }
+         if (!dup)
+         {
+            worktree_mapping_t *m = &state.worktrees[state.worktree_count];
+            snprintf(m->git_root, sizeof(m->git_root), "%s", gr);
+            worktree_sibling_path(gr, sid, m->worktree_path, sizeof(m->worktree_path));
+            state.worktree_count++;
+         }
+      }
    }
 
-   /* Auto-detect: if CWD is inside a git repo and not already covered,
-    * register it. worktree_entry_init resolves to git root and deduplicates. */
+   /* Auto-detect: if CWD is inside a git repo and not already covered, register it. */
    {
       char cwd[MAX_PATH_LEN];
       if (getcwd(cwd, sizeof(cwd)))
-         worktree_entry_init(&state, cwd, sid);
+      {
+         char gr[MAX_PATH_LEN];
+         if (git_repo_root(cwd, gr, sizeof(gr)) == 0)
+         {
+            int dup = 0;
+            for (int j = 0; j < state.worktree_count; j++)
+            {
+               if (strcmp(state.worktrees[j].git_root, gr) == 0)
+               {
+                  dup = 1;
+                  break;
+               }
+            }
+            if (!dup && state.worktree_count < MAX_WORKTREES)
+            {
+               worktree_mapping_t *m = &state.worktrees[state.worktree_count];
+               snprintf(m->git_root, sizeof(m->git_root), "%s", gr);
+               worktree_sibling_path(gr, sid, m->worktree_path, sizeof(m->worktree_path));
+               state.worktree_count++;
+            }
+         }
+      }
    }
 
    /* --- Session changelog: load previous HEADs, compute current HEADs --- */
@@ -989,9 +1025,13 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
 
    for (int i = 0; i < state.worktree_count; i++)
    {
-      const char *ws_root = state.worktrees[i].workspace_root;
+      const char *ws_root = state.worktrees[i].git_root;
       if (!ws_root[0])
          continue;
+
+      /* Derive project name from git root */
+      const char *proj_slash = strrchr(ws_root, '/');
+      const char *proj_name = proj_slash ? proj_slash + 1 : ws_root;
 
       /* Get current HEAD of default branch */
       char head_cmd_buf[MAX_PATH_LEN + 64];
@@ -1016,17 +1056,16 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          continue;
       }
 
-      cJSON_AddStringToObject(new_heads, state.worktrees[i].name, head_out);
+      cJSON_AddStringToObject(new_heads, proj_name, head_out);
 
       /* Check for previous HEAD */
-      cJSON *ph = prev_heads ? cJSON_GetObjectItem(prev_heads, state.worktrees[i].name) : NULL;
+      cJSON *ph = prev_heads ? cJSON_GetObjectItem(prev_heads, proj_name) : NULL;
       if (ph && cJSON_IsString(ph) && ph->valuestring[0] && strcmp(ph->valuestring, head_out) != 0)
       {
          /* Record this project as changed for background re-indexing */
          if (changed_count < MAX_WORKTREES)
          {
-            snprintf(changed_projects[changed_count], sizeof(changed_projects[0]), "%s",
-                     state.worktrees[i].name);
+            snprintf(changed_projects[changed_count], sizeof(changed_projects[0]), "%s", proj_name);
             snprintf(changed_roots[changed_count], sizeof(changed_roots[0]), "%s", ws_root);
             changed_count++;
          }
@@ -1055,7 +1094,7 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          {
             has_changelog = 1;
             int n = snprintf(changelog_buf + cl_off, sizeof(changelog_buf) - cl_off,
-                             "## %s (%d new commit%s)\n", state.worktrees[i].name, commit_count,
+                             "## %s (%d new commit%s)\n", proj_name, commit_count,
                              commit_count == 1 ? "" : "s");
             if (n > 0)
                cl_off += n;
@@ -1118,8 +1157,8 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
       /* Also place in each worktree path */
       for (int i = 0; i < state.worktree_count; i++)
       {
-         if (state.worktrees[i].path[0])
-            ensure_mcp_json(state.worktrees[i].path);
+         if (state.worktrees[i].worktree_path[0])
+            ensure_mcp_json(state.worktrees[i].worktree_path);
       }
    }
 
@@ -1160,21 +1199,8 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          if (tf)
             fclose(tf);
 
-         pid_t gc_pid = fork();
-         if (gc_pid == 0)
-         {
-            config_t gc_cfg;
-            config_load(&gc_cfg);
-            sqlite3 *gc_db = db_open_fast(gc_cfg.db_path);
-            if (gc_db)
-            {
-               worktree_gc(gc_db, &gc_cfg, 10LL * 1024 * 1024 * 1024, 0);
-               db_close(gc_db);
-            }
-            _exit(0);
-         }
-         if (gc_pid > 0)
-            waitpid(gc_pid, NULL, WNOHANG);
+         /* Worktree GC is no longer needed — sibling worktrees are visible
+          * to users and cleaned up on session end via worktree_cleanup(). */
       }
    }
 
@@ -1267,94 +1293,48 @@ void cmd_launch(app_ctx_t *ctx, int argc, char **argv)
    session_state_t state;
    session_state_load(&state, state_path);
 
-   /* Parallel worktree creation: spawn threads for all pending worktrees */
-   worktree_gate_init(&state);
-   pthread_t wt_threads[MAX_WORKTREES];
-   worktree_thread_arg_t wt_args[MAX_WORKTREES];
-   int wt_thread_count = 0;
-
-   for (int i = 0; i < state.worktree_count; i++)
+   /* Eagerly create sibling worktrees for all registered repos */
    {
-      if (state.worktrees[i].created == 0)
-      {
-         wt_args[wt_thread_count].state = &state;
-         wt_args[wt_thread_count].ws_index = i;
-         wt_args[wt_thread_count].result = -1;
-         if (pthread_create(&wt_threads[wt_thread_count], NULL, worktree_thread_fn,
-                            &wt_args[wt_thread_count]) == 0)
-         {
-            wt_thread_count++;
-         }
-         else
-         {
-            worktree_ensure(&state.worktrees[i]);
-         }
-      }
+      const char *launch_sid = session_id();
+      for (int i = 0; i < state.worktree_count; i++)
+         worktree_create_sibling(state.worktrees[i].git_root, launch_sid);
    }
 
-   for (int i = 0; i < wt_thread_count; i++)
-      pthread_join(wt_threads[i], NULL);
-   worktree_gate_signal(&state, 1);
-
-   /* Output worktree directory mapping now that creation is complete.
-    * Only list worktrees that were successfully created (created==1). */
+   /* Output worktree directory mapping */
+   if (state.worktree_count > 0)
    {
-      int created_count = 0;
+      printf("# Working Directories\n"
+             "This session uses isolated worktrees. Use these paths for all reads/writes:\n");
       for (int i = 0; i < state.worktree_count; i++)
-      {
-         if (state.worktrees[i].created == 1)
-            created_count++;
-      }
-      if (created_count > 0)
-      {
-         printf("# Working Directories\n"
-                "This session uses isolated worktrees. Use these paths for all reads/writes:\n");
-         for (int i = 0; i < state.worktree_count; i++)
-         {
-            if (state.worktrees[i].created == 1)
-               printf("- %s: %s\n", state.worktrees[i].name, state.worktrees[i].path);
-         }
-         printf("\n");
-      }
+         printf("- %s -> %s\n", state.worktrees[i].git_root, state.worktrees[i].worktree_path);
+      printf("\n");
    }
 
    char target_dir[MAX_PATH_LEN] = "";
    char cwd[MAX_PATH_LEN];
    if (getcwd(cwd, sizeof(cwd)) && state.worktree_count > 0)
    {
-      /* First pass: check if cwd is inside a workspace (exact match or subdir) */
-      for (int i = 0; i < cfg.workspace_count; i++)
+      /* If CWD is inside a tracked git root, compute the equivalent worktree path */
+      const char *wt = worktree_for_cwd(&state, cwd);
+      if (wt)
       {
-         size_t wlen = strlen(cfg.workspaces[i]);
-         if (strncmp(cwd, cfg.workspaces[i], wlen) == 0 && (cwd[wlen] == '/' || cwd[wlen] == '\0'))
+         /* Compute the relative suffix within the git root */
+         for (int i = 0; i < state.worktree_count; i++)
          {
-            const char *suffix = cwd + wlen;
-            const char *slash = strrchr(cfg.workspaces[i], '/');
-            const char *ws_name = slash ? slash + 1 : cfg.workspaces[i];
-
-            /* Find already-created worktree entry directly */
-            for (int j = 0; j < state.worktree_count; j++)
+            size_t rlen = strlen(state.worktrees[i].git_root);
+            if (strncmp(cwd, state.worktrees[i].git_root, rlen) == 0 &&
+                (cwd[rlen] == '/' || cwd[rlen] == '\0'))
             {
-               if (strcmp(state.worktrees[j].name, ws_name) == 0 && state.worktrees[j].created == 1)
-               {
-                  snprintf(target_dir, sizeof(target_dir), "%s%s", state.worktrees[j].path, suffix);
-                  worktree_db_touch(state.worktrees[j].path);
-                  state.dirty = 1;
-                  session_state_save(&state, state_path);
-                  break;
-               }
+               const char *suffix = cwd + rlen;
+               snprintf(target_dir, sizeof(target_dir), "%s%s", state.worktrees[i].worktree_path,
+                        suffix);
+               state.dirty = 1;
+               session_state_save(&state, state_path);
+               break;
             }
-            break;
          }
       }
-
-      /* If cwd is a parent of workspaces (not inside one), leave the user
-       * in their current directory. They launched from e.g. /root/dev
-       * intentionally and should not be forced into an arbitrary workspace. */
    }
-
-   pthread_mutex_destroy(&state.wt_mutex);
-   pthread_cond_destroy(&state.wt_cond);
 
    /* Check if this session has a changelog in working memory */
    int launch_has_changelog = 0;
@@ -1393,64 +1373,12 @@ void cmd_launch(app_ctx_t *ctx, int argc, char **argv)
 /* Clean up worktrees for a session. Warns if unpushed commits exist. */
 static void cleanup_worktrees(const session_state_t *state, const config_t *cfg, const char *sid)
 {
+   (void)cfg;
    if (state->worktree_count == 0)
       return;
 
-   char short_id[12];
-   snprintf(short_id, sizeof(short_id), "%.8s", sid);
-
    for (int i = 0; i < state->worktree_count; i++)
-   {
-      const char *wt_path = state->worktrees[i].path;
-      const char *wt_name = state->worktrees[i].name;
-
-      /* Find workspace root */
-      const char *ws_root = NULL;
-      for (int j = 0; j < cfg->workspace_count; j++)
-      {
-         const char *slash = strrchr(cfg->workspaces[j], '/');
-         const char *ws_name = slash ? slash + 1 : cfg->workspaces[j];
-         if (strcmp(ws_name, wt_name) == 0)
-         {
-            ws_root = cfg->workspaces[j];
-            break;
-         }
-      }
-      if (!ws_root)
-         continue;
-
-      /* Check for unpushed commits */
-      char branch_name[64];
-      snprintf(branch_name, sizeof(branch_name), "aimee/session/%s", short_id);
-      const char *log_argv[] = {"git",       "-C",    ws_root,     "log", "--oneline",
-                                branch_name, "--not", "--remotes", NULL};
-      char *log_out = NULL;
-      safe_exec_capture(log_argv, &log_out, 256);
-      if (log_out && log_out[0])
-      {
-         fprintf(stderr, "aimee: warning: %s has unpushed commits on %s\n", wt_name, branch_name);
-         free(log_out);
-         continue; /* do not remove */
-      }
-      free(log_out);
-
-      /* Remove worktree */
-      char *exec_out = NULL;
-      const char *rm_argv[] = {"git", "-C", ws_root, "worktree", "remove", wt_path, NULL};
-      safe_exec_capture(rm_argv, &exec_out, 1024);
-      free(exec_out);
-
-      /* Delete session branch */
-      const char *br_argv[] = {"git", "-C", ws_root, "branch", "-d", branch_name, NULL};
-      exec_out = NULL;
-      safe_exec_capture(br_argv, &exec_out, 1024);
-      free(exec_out);
-   }
-
-   /* Remove session worktree directory */
-   char session_dir[MAX_PATH_LEN];
-   snprintf(session_dir, sizeof(session_dir), "%s/worktrees/%s", config_output_dir(), sid);
-   rmdir(session_dir);
+      worktree_cleanup(state->worktrees[i].git_root, sid);
 }
 
 void cmd_wrapup(app_ctx_t *ctx, int argc, char **argv)

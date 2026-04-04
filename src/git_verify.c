@@ -7,8 +7,9 @@
  *     - name: tests
  *       run: cd src && make unit-tests
  *
- * `aimee git verify` runs all steps. On success, HEAD hash is recorded to
- * .aimee/.last-verify for informational use.
+ * `aimee git verify` runs all steps. On success, a file-mtime hash and
+ * timestamp are recorded to .aimee/.last-verify.  The verify gate checks
+ * this hash + a 1-hour TTL to decide whether re-verification is needed.
  */
 
 #include <stdio.h>
@@ -16,6 +17,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 #include "headers/git_verify.h"
 #include "headers/aimee.h"
@@ -113,6 +115,72 @@ int verify_load_config(const char *project_root, verify_config_t *cfg)
    return cfg->count > 0 ? 0 : -1;
 }
 
+/* --- File-mtime hash computation --- */
+
+/* Simple DJB2-style hash accumulator */
+static uint64_t hash_accum(uint64_t h, const void *data, size_t len)
+{
+   const unsigned char *p = data;
+   for (size_t i = 0; i < len; i++)
+      h = h * 5381 + p[i];
+   return h;
+}
+
+char *verify_compute_file_hash(const char *project_root)
+{
+   char cmd[MAX_PATH_LEN + 64];
+   if (project_root && project_root[0])
+      snprintf(cmd, sizeof(cmd), "git -C '%s' ls-files 2>/dev/null", project_root);
+   else
+      snprintf(cmd, sizeof(cmd), "git ls-files 2>/dev/null");
+
+   int rc;
+   char *file_list = run_cmd(cmd, &rc);
+   if (rc != 0 || !file_list || !file_list[0])
+   {
+      free(file_list);
+      return NULL;
+   }
+
+   uint64_t h = 0;
+   char *line = file_list;
+   while (line && *line)
+   {
+      char *nl = strchr(line, '\n');
+      if (nl)
+         *nl = '\0';
+
+      if (line[0])
+      {
+         /* Hash the file path */
+         h = hash_accum(h, line, strlen(line));
+
+         /* Get file mtime */
+         char full_path[MAX_PATH_LEN];
+         if (project_root && project_root[0])
+            snprintf(full_path, sizeof(full_path), "%s/%s", project_root, line);
+         else
+            snprintf(full_path, sizeof(full_path), "%s", line);
+
+         struct stat st;
+         if (stat(full_path, &st) == 0)
+         {
+            int64_t mtime = (int64_t)st.st_mtime;
+            h = hash_accum(h, &mtime, sizeof(mtime));
+         }
+      }
+
+      line = nl ? nl + 1 : NULL;
+   }
+
+   free(file_list);
+
+   char *result = malloc(20);
+   if (result)
+      snprintf(result, 20, "%016llx", (unsigned long long)h);
+   return result;
+}
+
 /* --- State file management --- */
 
 static void get_state_path(const char *project_root, char *buf, size_t len)
@@ -123,7 +191,13 @@ static void get_state_path(const char *project_root, char *buf, size_t len)
       snprintf(buf, len, ".aimee/.last-verify");
 }
 
-static int read_verified_hash(const char *project_root, char *hash, size_t hash_len)
+/* State file format (two lines):
+ *   <unix_timestamp>
+ *   <file_mtime_hash>
+ */
+
+static int read_verify_state(const char *project_root, time_t *timestamp, char *hash,
+                             size_t hash_len)
 {
    char path[MAX_PATH_LEN];
    get_state_path(project_root, path, sizeof(path));
@@ -132,7 +206,10 @@ static int read_verified_hash(const char *project_root, char *hash, size_t hash_
    if (!f)
       return -1;
 
-   if (!fgets(hash, (int)hash_len, f))
+   char ts_line[32] = {0};
+   char hash_line[32] = {0};
+
+   if (!fgets(ts_line, sizeof(ts_line), f) || !fgets(hash_line, sizeof(hash_line), f))
    {
       fclose(f);
       return -1;
@@ -140,14 +217,22 @@ static int read_verified_hash(const char *project_root, char *hash, size_t hash_
    fclose(f);
 
    /* Strip trailing whitespace */
-   size_t len = strlen(hash);
-   while (len > 0 && (hash[len - 1] == '\n' || hash[len - 1] == '\r' || hash[len - 1] == ' '))
-      hash[--len] = '\0';
+   for (char *p = ts_line + strlen(ts_line) - 1;
+        p >= ts_line && (*p == '\n' || *p == '\r' || *p == ' '); p--)
+      *p = '\0';
+   for (char *p = hash_line + strlen(hash_line) - 1;
+        p >= hash_line && (*p == '\n' || *p == '\r' || *p == ' '); p--)
+      *p = '\0';
 
-   return (len >= 7) ? 0 : -1;
+   if (!ts_line[0] || !hash_line[0])
+      return -1;
+
+   *timestamp = (time_t)strtoll(ts_line, NULL, 10);
+   snprintf(hash, hash_len, "%s", hash_line);
+   return 0;
 }
 
-static int write_verified_hash(const char *project_root, const char *hash)
+static int write_verify_state(const char *project_root, time_t timestamp, const char *hash)
 {
    char path[MAX_PATH_LEN], tmp_path[MAX_PATH_LEN];
    get_state_path(project_root, path, sizeof(path));
@@ -157,7 +242,7 @@ static int write_verified_hash(const char *project_root, const char *hash)
    if (!f)
       return -1;
 
-   fprintf(f, "%s\n", hash);
+   fprintf(f, "%lld\n%s\n", (long long)timestamp, hash);
    fclose(f);
 
    if (rename(tmp_path, path) != 0)
@@ -165,25 +250,6 @@ static int write_verified_hash(const char *project_root, const char *hash)
       remove(tmp_path);
       return -1;
    }
-   return 0;
-}
-
-static int get_current_head(char *hash, size_t hash_len)
-{
-   int rc;
-   char *out = run_cmd("git rev-parse HEAD 2>/dev/null", &rc);
-   if (rc != 0 || !out)
-   {
-      free(out);
-      return -1;
-   }
-   /* Strip newline */
-   size_t len = strlen(out);
-   while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
-      out[--len] = '\0';
-
-   snprintf(hash, hash_len, "%s", out);
-   free(out);
    return 0;
 }
 
@@ -254,14 +320,20 @@ int verify_run_all(const char *project_root, verify_config_t *cfg)
    if (!all_passed)
       return -1;
 
-   /* Record verified HEAD */
-   char head[64];
-   if (get_current_head(head, sizeof(head)) == 0)
+   /* Record file-mtime hash and timestamp */
+   char *file_hash = verify_compute_file_hash(project_root);
+   if (file_hash)
    {
-      if (write_verified_hash(project_root, head) == 0)
-         fprintf(stderr, "verified at %.*s\n", 8, head);
+      time_t now = time(NULL);
+      if (write_verify_state(project_root, now, file_hash) == 0)
+         fprintf(stderr, "verified at %s\n", file_hash);
       else
          fprintf(stderr, "warning: could not record verify state\n");
+      free(file_hash);
+   }
+   else
+   {
+      fprintf(stderr, "warning: could not compute file hash\n");
    }
 
    return 0;
@@ -269,7 +341,7 @@ int verify_run_all(const char *project_root, verify_config_t *cfg)
 
 /* --- Check verification state --- */
 
-int verify_check_head(const char *project_root, char *msg_buf, size_t msg_len)
+int verify_check(const char *project_root, char *msg_buf, size_t msg_len)
 {
    verify_config_t cfg;
    if (verify_load_config(project_root, &cfg) != 0)
@@ -280,34 +352,50 @@ int verify_check_head(const char *project_root, char *msg_buf, size_t msg_len)
       return 1;
    }
 
-   char verified_hash[64] = {0};
-   if (read_verified_hash(project_root, verified_hash, sizeof(verified_hash)) != 0)
+   time_t stored_ts = 0;
+   char stored_hash[32] = {0};
+   if (read_verify_state(project_root, &stored_ts, stored_hash, sizeof(stored_hash)) != 0)
    {
       if (msg_buf)
          snprintf(msg_buf, msg_len, "no verification recorded. Run 'aimee git verify' first.");
       return 0;
    }
 
-   char current_head[64] = {0};
-   if (get_current_head(current_head, sizeof(current_head)) != 0)
-   {
-      if (msg_buf)
-         snprintf(msg_buf, msg_len, "could not determine HEAD");
-      return 0;
-   }
-
-   if (strcmp(verified_hash, current_head) != 0)
+   /* TTL check */
+   time_t now = time(NULL);
+   double elapsed = difftime(now, stored_ts);
+   if (elapsed > VERIFY_TTL_SECS)
    {
       if (msg_buf)
          snprintf(msg_buf, msg_len,
-                  "HEAD has changed since last verification "
-                  "(verified: %.8s, current: %.8s). Run 'aimee git verify'.",
-                  verified_hash, current_head);
+                  "verification expired (%.0f minutes ago, TTL is %d minutes). "
+                  "Run 'aimee git verify'.",
+                  elapsed / 60.0, VERIFY_TTL_SECS / 60);
+      return 0;
+   }
+
+   /* File-mtime hash check */
+   char *current_hash = verify_compute_file_hash(project_root);
+   if (!current_hash)
+   {
+      if (msg_buf)
+         snprintf(msg_buf, msg_len, "could not compute file hash");
+      return 0;
+   }
+
+   if (strcmp(stored_hash, current_hash) != 0)
+   {
+      if (msg_buf)
+         snprintf(msg_buf, msg_len,
+                  "tracked files have changed since last verification. "
+                  "Run 'aimee git verify'.");
+      free(current_hash);
       return 0;
    }
 
    if (msg_buf)
-      snprintf(msg_buf, msg_len, "verified at %.8s", current_head);
+      snprintf(msg_buf, msg_len, "verified (%.0f minutes ago)", elapsed / 60.0);
+   free(current_hash);
    return 1;
 }
 
@@ -382,17 +470,19 @@ cJSON *handle_git_verify(cJSON *args)
 
    if (all_passed)
    {
-      char head[64];
-      if (get_current_head(head, sizeof(head)) == 0)
+      char *file_hash = verify_compute_file_hash(NULL);
+      if (file_hash)
       {
-         write_verified_hash(NULL, head);
+         time_t now = time(NULL);
+         write_verify_state(NULL, now, file_hash);
          pos += (size_t)snprintf(result + pos, sizeof(result) - pos,
-                                 "\nall %d steps passed -- verified at %.8s", cfg.count, head);
+                                 "\nall %d steps passed -- verified (%s)", cfg.count, file_hash);
+         free(file_hash);
       }
       else
       {
          pos += (size_t)snprintf(result + pos, sizeof(result) - pos,
-                                 "\nall %d steps passed (could not record HEAD)", cfg.count);
+                                 "\nall %d steps passed (could not record state)", cfg.count);
       }
    }
 

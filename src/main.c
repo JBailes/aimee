@@ -272,51 +272,17 @@ int main(int argc, char **argv)
       /* 2. Run session-start: prune stale sessions, set up state and worktrees */
       cmd_session_start(&ctx, 0, NULL);
 
-      /* 3. Parallel worktree creation: spawn threads for all pending worktrees,
-       *    then chdir to the appropriate one after they complete. */
+      /* 3. Create sibling worktrees and chdir to the appropriate one. */
       {
          char state_path[MAX_PATH_LEN];
          session_state_path(state_path, sizeof(state_path));
          session_state_t state;
          session_state_load(&state, state_path);
-         worktree_gate_init(&state);
 
-         /* Spawn one pthread per worktree that needs creation */
-         pthread_t wt_threads[MAX_WORKTREES];
-         worktree_thread_arg_t wt_args[MAX_WORKTREES];
-         int thread_count = 0;
-
+         /* Create all pending worktrees */
+         const char *sid = session_id();
          for (int i = 0; i < state.worktree_count; i++)
-         {
-            if (state.worktrees[i].created == 0)
-            {
-               wt_args[thread_count].state = &state;
-               wt_args[thread_count].ws_index = i;
-               wt_args[thread_count].result = -1;
-               if (pthread_create(&wt_threads[thread_count], NULL, worktree_thread_fn,
-                                  &wt_args[thread_count]) == 0)
-               {
-                  thread_count++;
-               }
-               else
-               {
-                  /* Fallback: create synchronously if thread spawn fails */
-                  worktree_ensure(&state.worktrees[i]);
-               }
-            }
-         }
-
-         /* Join all worktree threads — we need them ready before chdir */
-         int all_ok = 1;
-         for (int i = 0; i < thread_count; i++)
-         {
-            pthread_join(wt_threads[i], NULL);
-            if (wt_args[i].result != 0)
-               all_ok = 0;
-         }
-
-         /* Signal worktree readiness for any downstream gates */
-         worktree_gate_signal(&state, all_ok ? 1 : -1);
+            worktree_create_sibling(state.worktrees[i].git_root, sid);
 
          /* chdir to the worktree equivalent of cwd */
          if (state.worktree_count > 0)
@@ -324,54 +290,33 @@ int main(int argc, char **argv)
             char cwd[MAX_PATH_LEN];
             if (getcwd(cwd, sizeof(cwd)))
             {
-               for (int i = 0; i < cfg.workspace_count; i++)
+               const char *wt = worktree_for_cwd(&state, cwd);
+               if (wt)
                {
-                  size_t wlen = strlen(cfg.workspaces[i]);
-                  if (strncmp(cwd, cfg.workspaces[i], wlen) == 0 &&
-                      (cwd[wlen] == '/' || cwd[wlen] == '\0'))
+                  /* Compute equivalent path inside worktree */
+                  for (int i = 0; i < state.worktree_count; i++)
                   {
-                     const char *suffix = cwd + wlen;
-                     const char *slash = strrchr(cfg.workspaces[i], '/');
-                     const char *ws_name = slash ? slash + 1 : cfg.workspaces[i];
-
-                     /* Find the matching worktree entry (already created by thread) */
-                     const char *wt_path = NULL;
-                     for (int j = 0; j < state.worktree_count; j++)
+                     size_t rlen = strlen(state.worktrees[i].git_root);
+                     if (strncmp(cwd, state.worktrees[i].git_root, rlen) == 0 &&
+                         (cwd[rlen] == '/' || cwd[rlen] == '\0'))
                      {
-                        if (strcmp(state.worktrees[j].name, ws_name) == 0 &&
-                            state.worktrees[j].created == 1)
-                        {
-                           wt_path = state.worktrees[j].path;
-                           worktree_db_touch(wt_path);
-                           state.dirty = 1;
-                           break;
-                        }
-                     }
-
-                     if (wt_path)
-                     {
+                        const char *suffix = cwd + rlen;
                         char target[MAX_PATH_LEN];
-                        snprintf(target, sizeof(target), "%s%s", wt_path, suffix);
+                        snprintf(target, sizeof(target), "%s%s",
+                                 state.worktrees[i].worktree_path, suffix);
                         if (chdir(target) == 0)
                            fprintf(stderr, "aimee: session cwd: %s\n", target);
                         else
                            fprintf(stderr, "aimee: warning: could not chdir to worktree: %s\n",
                                    target);
+                        state.dirty = 1;
                         session_state_save(&state, state_path);
+                        break;
                      }
-                     else
-                     {
-                        fprintf(stderr, "aimee: error: failed to create worktree for '%s'\n",
-                                ws_name);
-                     }
-                     break;
                   }
                }
             }
          }
-
-         pthread_mutex_destroy(&state.wt_mutex);
-         pthread_cond_destroy(&state.wt_cond);
       }
 
       /* 4. Determine provider */
