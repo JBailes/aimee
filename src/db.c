@@ -678,19 +678,8 @@ static const struct
          "INSERT OR IGNORE INTO kind_lifecycle VALUES"
          " ('policy',     1,  0.7,  365, 0.3,  180, 5.0);"},
 
-    /* 33: worktree registry for janitor/gc */
-    {33, "CREATE TABLE IF NOT EXISTS worktrees ("
-         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-         "  session_id TEXT NOT NULL,"
-         "  workspace TEXT NOT NULL,"
-         "  path TEXT NOT NULL,"
-         "  created_at INTEGER NOT NULL,"
-         "  last_accessed_at INTEGER NOT NULL,"
-         "  size_bytes INTEGER NOT NULL DEFAULT 0,"
-         "  state TEXT NOT NULL DEFAULT 'active'"
-         ");"
-         "CREATE INDEX IF NOT EXISTS idx_worktrees_session ON worktrees(session_id);"
-         "CREATE INDEX IF NOT EXISTS idx_worktrees_state ON worktrees(state);"},
+    /* 33: worktree registry (deprecated — sibling worktrees are filesystem-only) */
+    {33, "SELECT 1;"},
 
     /* 34: inter-session work queue */
     {34, "CREATE TABLE IF NOT EXISTS work_queue ("

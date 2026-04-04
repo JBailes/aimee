@@ -305,12 +305,8 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
 
    int did_chdir = mcp_chdir_git_root(git_old_cwd, sizeof(git_old_cwd), args);
 
-   /* If we're in a workspace that has a worktree, chdir to the worktree instead.
-    * Special case: if the MCP server inherited CWD from a Claude Code worktree
-    * (path contains .claude/worktrees/), worktree_for_path_if_created will
-    * return NULL because it exempts .claude/worktrees/ paths. In that case,
-    * extract the workspace root from the Claude Code worktree path and look up
-    * the aimee worktree directly. */
+   /* If we're in a workspace that has a sibling worktree, chdir to it.
+    * Uses the worktree mappings stored in session state. */
    if (sid && sid[0])
    {
       char state_path[MAX_PATH_LEN];
@@ -323,9 +319,7 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
          char cwd[MAX_PATH_LEN];
          if (getcwd(cwd, sizeof(cwd)))
          {
-            config_t cfg;
-            config_load(&cfg);
-            const char *wt = worktree_for_path_if_created(&state, &cfg, cwd);
+            const char *wt = worktree_for_cwd(&state, cwd);
             if (wt)
             {
                fprintf(stderr, "aimee: mcp git: redirecting from %s to worktree %s\n", cwd, wt);
@@ -333,40 +327,6 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
                {
                   did_chdir = 1;
                   mcp_git_set_worktree(1);
-               }
-            }
-            else
-            {
-               /* Check if CWD is inside a Claude Code worktree. If so, extract
-                * the workspace root and find the aimee worktree for it. */
-               const char *cc_marker = strstr(cwd, "/.claude/worktrees/");
-               if (cc_marker)
-               {
-                  /* Workspace root is everything before /.claude/worktrees/ */
-                  char ws_root[MAX_PATH_LEN];
-                  size_t ws_len = (size_t)(cc_marker - cwd);
-                  if (ws_len > 0 && ws_len < sizeof(ws_root))
-                  {
-                     memcpy(ws_root, cwd, ws_len);
-                     ws_root[ws_len] = '\0';
-
-                     /* Find the workspace name and resolve its aimee worktree */
-                     const char *slash = strrchr(ws_root, '/');
-                     const char *ws_name = slash ? slash + 1 : ws_root;
-                     const char *aimee_wt = worktree_resolve_path(&state, ws_name);
-                     if (aimee_wt)
-                     {
-                        fprintf(stderr,
-                                "aimee: mcp git: CWD is Claude Code worktree, "
-                                "redirecting to aimee worktree %s\n",
-                                aimee_wt);
-                        if (chdir(aimee_wt) == 0)
-                        {
-                           did_chdir = 1;
-                           mcp_git_set_worktree(1);
-                        }
-                     }
-                  }
                }
             }
          }

@@ -488,9 +488,12 @@ static void wt_subcmd_gc(app_ctx_t *ctx, sqlite3 *db, int argc, char **argv)
 
    config_t cfg;
    config_load(&cfg);
-   int cleaned = worktree_gc(db, &cfg, DEFAULT_DISK_BUDGET_BYTES, 1);
-   if (cleaned == 0)
-      fprintf(stderr, "aimee: gc: no stale worktrees found\n");
+   /* Worktree GC no longer needed — sibling worktrees are visible to users
+    * and cleaned up on session end. Use 'ls <project>-*' to find worktrees. */
+   (void)db;
+   (void)cfg;
+   fprintf(stderr, "aimee: gc: sibling worktrees are now user-visible. "
+                   "Use 'git worktree list' to find active worktrees.\n");
 }
 
 static void wt_subcmd_list(app_ctx_t *ctx, sqlite3 *db, int argc, char **argv)

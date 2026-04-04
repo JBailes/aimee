@@ -15,14 +15,12 @@ typedef struct
    char reason[256];
 } classification_t;
 
+/* Simple worktree mapping: git repo root -> sibling worktree path */
 typedef struct
 {
-   char name[128];
-   char path[MAX_PATH_LEN];
-   char workspace_root[MAX_PATH_LEN]; /* original repo path for lazy creation */
-   char base_branch[64];              /* cached base branch (e.g. "main", "origin/main") */
-   int created;                       /* 0=pending, 1=created, -1=failed */
-} worktree_entry_t;
+   char git_root[MAX_PATH_LEN];    /* original repo root (e.g. /root/dev/aimee) */
+   char worktree_path[MAX_PATH_LEN]; /* sibling worktree (e.g. /root/dev/aimee-abc12345) */
+} worktree_mapping_t;
 
 typedef struct
 {
@@ -31,27 +29,13 @@ typedef struct
    char session_mode[16];
    char guardrail_mode[16];
    int64_t active_task_id;
-   worktree_entry_t worktrees[MAX_WORKTREES];
-   int worktree_count;
-   uint16_t fetched_mask; /* bitmask: which worktrees have had git fetch this session */
-   char prev_main_head[MAX_WORKTREES][64]; /* previous session's main HEAD per workspace */
    int hook_call_count; /* increments each pre_tool_check call for diagnostics */
    int dirty;
 
-   /* Parallel startup: worktree readiness gate.
-    * 0=pending, 1=ready, -1=failed. Write operations block until ready. */
-   atomic_int worktree_ready;
-   pthread_mutex_t wt_mutex;
-   pthread_cond_t wt_cond;
+   /* Active worktree mappings for this session */
+   worktree_mapping_t worktrees[MAX_WORKTREES];
+   int worktree_count;
 } session_state_t;
-
-/* Thread argument for background worktree creation */
-typedef struct
-{
-   session_state_t *state;
-   int ws_index; /* which worktree entry to create */
-   int result;   /* 0=success, -1=failure */
-} worktree_thread_arg_t;
 
 /* Check if a filename matches sensitive patterns (substring match). */
 int is_sensitive_file(const char *path);
@@ -92,61 +76,32 @@ int is_shell_tool(const char *tool);
 /* Normalize a relative path against cwd. Result written to buf. */
 char *normalize_path(const char *path, const char *cwd, char *buf, size_t buf_len);
 
-/* Ensure a worktree entry has been created. Returns 0 on success, -1 on failure.
- * No-op if already created. Sets created flag to 1 on success, -1 on failure. */
-int worktree_ensure(worktree_entry_t *entry);
-
-/* Resolve a worktree path by name, lazily creating on first access.
- * Returns the worktree path, or NULL on failure. */
-const char *worktree_resolve_path(session_state_t *state, const char *name);
-
-/* Look up the worktree path for a given workspace root. Returns the worktree
- * path if the normalized file path falls inside a workspace that has a
- * worktree, or NULL if no worktree applies. Ensures the worktree is created. */
-const char *worktree_for_path(session_state_t *state, const config_t *cfg, const char *norm_path);
-
-/* Initialize a worktree entry from any directory path. Resolves to the git
- * repo root, deduplicates, and appends to state->worktrees. Returns 0 on
- * success. This is the single place where workspace_root is set — enforcing
- * that worktrees are always rooted at the .git root, never a subdirectory. */
-int worktree_entry_init(session_state_t *state, const char *dir, const char *sid);
-
 /* Resolve the git repository root for a directory. Returns 0 on success. */
 int git_repo_root(const char *dir, char *out_root, size_t out_len);
 
-/* Register a worktree creation in the database (best-effort). */
-void worktree_db_register(const char *sid, const char *workspace, const char *path);
+/* Compute the expected sibling worktree path for a git repo and session.
+ * Writes result to wt_buf. Returns 0 on success. */
+int worktree_sibling_path(const char *git_root, const char *session_id,
+                          char *wt_buf, size_t wt_len);
 
-/* Update last_accessed_at for a worktree (best-effort). */
-void worktree_db_touch(const char *path);
+/* Create a sibling worktree for a git repo. Returns 0 on success. */
+int worktree_create_sibling(const char *git_root, const char *session_id);
 
-/* Run worktree garbage collection. Removes stale worktrees, respects disk budget.
- * Returns number of worktrees cleaned. */
-int worktree_gc(sqlite3 *db, const config_t *cfg, int64_t disk_budget_bytes, int verbose);
+/* Clean up a session's worktree. Removes if clean, warns if dirty. */
+void worktree_cleanup(const char *git_root, const char *session_id);
 
-/* Same as worktree_for_path but only returns the path if the worktree has
- * already been created. Does NOT trigger creation. Used by read guards so
- * reads can go to the original repo before the first write. */
-const char *worktree_for_path_if_created(session_state_t *state, const config_t *cfg,
-                                         const char *norm_path);
+/* Check if the current branch has a merged PR. Returns 1 if merged. */
+int check_merged_pr_for_branch(void);
+
+/* Look up the worktree path for a given CWD from session state.
+ * Returns the worktree path if the CWD is inside a tracked git root,
+ * or NULL if no worktree applies. */
+const char *worktree_for_cwd(const session_state_t *state, const char *cwd);
 
 /* Shared filesystem path validation for all tool paths.
  * Resolves symlinks, rejects traversal attempts, rejects sensitive paths.
  * Returns NULL on success (path is safe), or a static error string on failure.
  * On success, the resolved path is written to resolved_buf. */
 const char *guardrails_validate_file_path(const char *path, char *resolved_buf, size_t resolved_len);
-
-/* Initialize the worktree readiness gate (mutex + condvar). */
-void worktree_gate_init(session_state_t *state);
-
-/* Signal that all worktrees are ready (or failed). Called after threads join. */
-void worktree_gate_signal(session_state_t *state, int ready);
-
-/* Wait for worktree readiness. Returns 1 if ready, -1 if failed.
- * Used by pre_tool_check to gate write operations. */
-int worktree_gate_wait(session_state_t *state);
-
-/* Background worktree creation thread function. */
-void *worktree_thread_fn(void *arg);
 
 #endif /* DEC_GUARDRAILS_H */

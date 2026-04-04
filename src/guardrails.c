@@ -4,8 +4,6 @@
 #include "cJSON.h"
 #include <ctype.h>
 #include <dirent.h>
-#include <pthread.h>
-#include <stdatomic.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -547,89 +545,35 @@ static int check_classification(session_state_t *state, classification_t *cls, c
    return 0;
 }
 
-/* Trigger a background git fetch for a workspace the first time it is touched.
- * Uses the fetched_mask bitmask in session state to avoid repeated fetches. */
-static void fetch_workspace_if_needed(session_state_t *state, const config_t *cfg,
-                                      const char *norm_path)
+/* Check if a Bash command contains a git push invocation. */
+static int bash_has_git_push(const char *cmd)
 {
-   if (!state || !cfg || !norm_path || state->worktree_count == 0)
-      return;
-
-   /* Find the most specific (longest) matching workspace. */
-   int best = -1;
-   size_t best_len = 0;
-   for (int i = 0; i < cfg->workspace_count && i < 16; i++)
+   if (!cmd)
+      return 0;
+   const char *p = cmd;
+   while ((p = strstr(p, "git")) != NULL)
    {
-      size_t wlen = strlen(cfg->workspaces[i]);
-      if (wlen == 0)
-         continue;
-
-      /* Check if this path is inside workspace i (or its worktree) */
-      int match = 0;
-      if (strncmp(norm_path, cfg->workspaces[i], wlen) == 0 &&
-          (norm_path[wlen] == '/' || norm_path[wlen] == '\0'))
-         match = 1;
-
-      if (!match)
+      /* Ensure "git" is at start or after a separator */
+      if (p != cmd)
       {
-         /* Also check against worktree paths */
-         const char *slash = strrchr(cfg->workspaces[i], '/');
-         const char *ws_name = slash ? slash + 1 : cfg->workspaces[i];
-         for (int j = 0; j < state->worktree_count; j++)
+         char prev = *(p - 1);
+         if (prev != ' ' && prev != '\t' && prev != ';' && prev != '&' && prev != '|' &&
+             prev != '(' && prev != '\n')
          {
-            if (strcmp(state->worktrees[j].name, ws_name) == 0)
-            {
-               size_t wtlen = strlen(state->worktrees[j].path);
-               if (strncmp(norm_path, state->worktrees[j].path, wtlen) == 0 &&
-                   (norm_path[wtlen] == '/' || norm_path[wtlen] == '\0'))
-               {
-                  match = 1;
-                  break;
-               }
-            }
+            p += 3;
+            continue;
          }
       }
-
-      if (match && wlen > best_len)
-      {
-         best = i;
-         best_len = wlen;
-      }
+      /* Skip "git" and whitespace, check for "push" */
+      const char *after = p + 3;
+      while (*after == ' ' || *after == '\t')
+         after++;
+      if (strncmp(after, "push", 4) == 0 &&
+          (after[4] == '\0' || after[4] == ' ' || after[4] == '\t' || after[4] == ';'))
+         return 1;
+      p = after;
    }
-
-   if (best < 0)
-      return;
-
-   {
-      int i = best;
-      uint16_t bit = (uint16_t)(1 << i);
-      if (state->fetched_mask & bit)
-         return; /* already fetched this session */
-
-      state->fetched_mask |= bit;
-      state->dirty = 1;
-
-      /* Background fetch via double-fork so the grandchild is reparented to init,
-       * preventing zombie processes in the parent. */
-      pid_t pid = fork();
-      if (pid == 0)
-      {
-         /* First child: fork again and exit immediately */
-         pid_t pid2 = fork();
-         if (pid2 == 0)
-         {
-            /* Grandchild: do the actual work */
-            setsid();
-            const char *argv[] = {"git", "-C", cfg->workspaces[i], "fetch", "origin", NULL};
-            execvp(argv[0], (char *const *)argv);
-            _exit(127);
-         }
-         _exit(0); /* First child exits; grandchild reparented to init */
-      }
-      if (pid > 0)
-         waitpid(pid, NULL, 0); /* Reap the short-lived first child */
-      return;
-   }
+   return 0;
 }
 
 int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
@@ -661,32 +605,6 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
 
    char norm[MAX_PATH_LEN];
 
-   /* Lazy fetch: first time a tool touches a workspace, background-fetch its remote.
-    * Check file_path, path (Glob/Grep), command paths (Bash), and cwd. */
-   if (state->worktree_count > 0)
-   {
-      config_t fcfg;
-      config_load(&fcfg);
-      char fnorm[MAX_PATH_LEN];
-
-      if (fp && cJSON_IsString(fp))
-      {
-         normalize_path(fp->valuestring, cwd, fnorm, sizeof(fnorm));
-         fetch_workspace_if_needed(state, &fcfg, fnorm);
-      }
-      else
-      {
-         /* Glob/Grep use "path" field; Bash uses cwd implicitly */
-         cJSON *p = cJSON_GetObjectItem(root, "path");
-         const char *check_path = (p && cJSON_IsString(p)) ? p->valuestring : cwd;
-         if (check_path)
-         {
-            normalize_path(check_path, cwd, fnorm, sizeof(fnorm));
-            fetch_workspace_if_needed(state, &fcfg, fnorm);
-         }
-      }
-   }
-
    /* Plan mode check: block write tools */
    if (strcmp(state->session_mode, MODE_PLAN) == 0)
    {
@@ -705,354 +623,94 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
       }
    }
 
-   /* Auto-provision worktrees: if no worktrees exist and a write targets a workspace,
-    * create worktree entries on the fly so enforcement kicks in. This prevents writes
-    * to the real repo when session-start didn't run (e.g., MCP tools, late hook setup). */
-   if (state->worktree_count == 0 &&
-       (is_edit_tool(tool_name) || (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
-                                    is_write_command(cmd->valuestring))))
+   /* Worktree enforcement: block writes to real repo paths and redirect to
+    * sibling worktree. Simple model: one worktree per git repo per session,
+    * created as <project-root>-<short-session-id> next to the project. */
+   if (is_edit_tool(tool_name) || (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
+                                   is_write_command(cmd->valuestring)))
    {
-      config_t acfg;
-      config_load(&acfg);
-
-      /* Determine the target path for the write */
-      const char *write_target = cwd;
+      /* Determine write target path */
+      const char *target = cwd;
       char wnorm[MAX_PATH_LEN];
       if (is_edit_tool(tool_name) && fp && cJSON_IsString(fp))
       {
          normalize_path(fp->valuestring, cwd, wnorm, sizeof(wnorm));
-         write_target = wnorm;
+         target = wnorm;
       }
 
-      /* Check if the write target is inside any configured workspace */
-      int matched_ws = -1;
-      size_t best_len = 0;
-      for (int i = 0; i < acfg.workspace_count; i++)
+      /* Find git root for the target */
+      char target_dir[MAX_PATH_LEN];
+      snprintf(target_dir, sizeof(target_dir), "%s", target);
+      /* If target looks like a file, use its directory */
+      char *last_slash = strrchr(target_dir, '/');
+      if (last_slash && last_slash != target_dir)
       {
-         size_t wlen = strlen(acfg.workspaces[i]);
-         if (wlen == 0)
-            continue;
-         if (strncmp(write_target, acfg.workspaces[i], wlen) == 0 &&
-             (write_target[wlen] == '/' || write_target[wlen] == '\0'))
+         struct stat st;
+         if (stat(target_dir, &st) != 0 || !S_ISDIR(st.st_mode))
+            *last_slash = '\0';
+      }
+
+      char git_root_buf[MAX_PATH_LEN];
+      if (git_repo_root(target_dir, git_root_buf, sizeof(git_root_buf)) == 0)
+      {
+         const char *sid = session_id();
+         char wt_path[MAX_PATH_LEN];
+         worktree_sibling_path(git_root_buf, sid, wt_path, sizeof(wt_path));
+
+         /* If target is already inside the worktree path, allow */
+         size_t wt_len = strlen(wt_path);
+         if (strncmp(target, wt_path, wt_len) != 0 ||
+             (target[wt_len] != '/' && target[wt_len] != '\0'))
          {
-            if (wlen > best_len)
+            /* Target is in the real repo, not the worktree — block and redirect */
+            struct stat wt_st;
+            if (stat(wt_path, &wt_st) != 0)
             {
-               matched_ws = i;
-               best_len = wlen;
+               /* Worktree doesn't exist yet — create it */
+               worktree_create_sibling(git_root_buf, sid);
             }
-         }
-      }
 
-      /* If either the write target or CWD is inside a .claude/worktrees/
-       * subdirectory of a configured workspace, the agent is already in a
-       * Claude Code worktree — do not auto-provision or block. */
-      if (matched_ws >= 0)
-      {
-         const char *wt_remainder = write_target + best_len;
-         if (wt_remainder[0] == '/')
-            wt_remainder++;
-         if (strncmp(wt_remainder, ".claude/worktrees/", 18) == 0)
-            matched_ws = -1;
-      }
-      if (matched_ws >= 0 && cwd[0])
-      {
-         /* Also check CWD — Bash tool uses CWD as write_target, but the
-          * actual CWD may be a Claude Code worktree even though the aimee
-          * workspace root matches as a prefix. */
-         for (int i = 0; i < acfg.workspace_count; i++)
-         {
-            size_t wlen = strlen(acfg.workspaces[i]);
-            if (wlen == 0)
-               continue;
-            if (strncmp(cwd, acfg.workspaces[i], wlen) == 0 &&
-                (cwd[wlen] == '/' || cwd[wlen] == '\0'))
+            /* Register mapping in session state so MCP git tools can find it */
             {
-               const char *cwd_remainder = cwd + wlen;
-               if (cwd_remainder[0] == '/')
-                  cwd_remainder++;
-               if (strncmp(cwd_remainder, ".claude/worktrees/", 18) == 0)
+               int found = 0;
+               for (int i = 0; i < state->worktree_count; i++)
                {
-                  matched_ws = -1;
-                  break;
+                  if (strcmp(state->worktrees[i].git_root, git_root_buf) == 0)
+                  {
+                     found = 1;
+                     break;
+                  }
+               }
+               if (!found && state->worktree_count < MAX_WORKTREES)
+               {
+                  worktree_mapping_t *m = &state->worktrees[state->worktree_count];
+                  snprintf(m->git_root, sizeof(m->git_root), "%s", git_root_buf);
+                  snprintf(m->worktree_path, sizeof(m->worktree_path), "%s", wt_path);
+                  state->worktree_count++;
+                  state->dirty = 1;
                }
             }
-         }
-      }
 
-      if (matched_ws >= 0)
-      {
-         /* Auto-provision worktree entries for all configured workspaces.
-          * worktree_entry_init resolves to git root and deduplicates. */
-         const char *sid = session_id();
-         for (int i = 0; i < acfg.workspace_count; i++)
-            worktree_entry_init(state, acfg.workspaces[i], sid);
-
-         /* Also add cwd if it's inside a git repo */
-         if (cwd[0])
-            worktree_entry_init(state, cwd, sid);
-
-         state->dirty = 1;
-         fprintf(stderr, "aimee: auto-provisioned %d worktree(s) — session-start did not run\n",
-                 state->worktree_count);
-
-         /* Eagerly create the worktree for the targeted workspace */
-         const char *ws_slash = strrchr(acfg.workspaces[matched_ws], '/');
-         const char *ws_name = ws_slash ? ws_slash + 1 : acfg.workspaces[matched_ws];
-         const char *wt_path = NULL;
-         for (int i = 0; i < state->worktree_count; i++)
-         {
-            if (strcmp(state->worktrees[i].name, ws_name) == 0)
-            {
-               if (worktree_ensure(&state->worktrees[i]) == 0)
-                  wt_path = state->worktrees[i].path;
-               break;
-            }
-         }
-
-         /* Block and redirect only when a valid worktree was created or exists.
-          * If worktree creation failed (e.g., stale session, missing directory),
-          * allow the operation with a warning — blocking to a nonexistent path
-          * is worse than allowing the write to proceed. */
-         if (wt_path)
-         {
+            fprintf(stderr, "aimee: worktree redirect: %s -> %s\n", target, wt_path);
             snprintf(msg_buf, msg_len,
-                     "BLOCKED: write to real workspace path. "
-                     "Use worktree instead: %s",
-                     wt_path);
+                     "BLOCKED: write to real repo path. Use worktree instead: %s", wt_path);
             cJSON_Delete(root);
             return 2;
-         }
-         else
-         {
-            fprintf(stderr,
-                    "aimee: warning: worktree creation failed for workspace '%s'; "
-                    "allowing write to proceed\n",
-                    acfg.workspaces[matched_ws]);
          }
       }
    }
 
-   /* Worktree enforcement: block writes to real workspace paths when a worktree exists */
-   if (state->worktree_count > 0)
+   /* Merged-PR enforcement for Bash git push commands */
+   if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
+       bash_has_git_push(cmd->valuestring))
    {
-      config_t wcfg;
-      config_load(&wcfg);
-      /* Merge workspace roots from session worktree entries so enforcement
-       * works even when config file doesn't have workspaces (CI, tests). */
-      for (int wi = 0; wi < state->worktree_count && wcfg.workspace_count < 64; wi++)
+      if (check_merged_pr_for_branch())
       {
-         if (state->worktrees[wi].workspace_root[0])
-         {
-            int dup = 0;
-            for (int wj = 0; wj < wcfg.workspace_count; wj++)
-            {
-               if (strcmp(wcfg.workspaces[wj], state->worktrees[wi].workspace_root) == 0)
-               {
-                  dup = 1;
-                  break;
-               }
-            }
-            if (!dup)
-               snprintf(wcfg.workspaces[wcfg.workspace_count++], sizeof(wcfg.workspaces[0]), "%s",
-                        state->worktrees[wi].workspace_root);
-         }
-      }
-      const char *target_path = NULL;
-
-      if (is_edit_tool(tool_name) && fp && cJSON_IsString(fp))
-      {
-         normalize_path(fp->valuestring, cwd, norm, sizeof(norm));
-         target_path = norm;
-      }
-
-      if (target_path)
-      {
-         const char *wt = worktree_for_path(state, &wcfg, target_path);
-         if (wt)
-         {
-            fprintf(stderr, "aimee: worktree check: tool=%s path=%s -> BLOCKED (wt=%s)\n",
-                    tool_name, target_path, wt);
-            snprintf(msg_buf, msg_len,
-                     "BLOCKED: write to real workspace path. Use worktree instead: %s", wt);
-            cJSON_Delete(root);
-            return 2;
-         }
-         fprintf(stderr, "aimee: worktree check: tool=%s path=%s -> ALLOWED\n", tool_name,
-                 target_path);
-      }
-
-      /* Block bash write commands targeting real workspace paths */
-      if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
-          is_write_command(cmd->valuestring))
-      {
-         /* Check cwd itself: git commands operate on the cwd implicitly */
-         const char *cwd_wt = worktree_for_path(state, &wcfg, cwd);
-         if (cwd_wt)
-         {
-            fprintf(stderr, "aimee: worktree check: tool=Bash cwd=%s -> BLOCKED (wt=%s)\n", cwd,
-                    cwd_wt);
-            snprintf(msg_buf, msg_len,
-                     "BLOCKED: write command running in real workspace directory. "
-                     "Use worktree instead: %s",
-                     cwd_wt);
-            cJSON_Delete(root);
-            return 2;
-         }
-
-         /* Check cd targets: "cd /path && cmd" changes effective cwd */
-         {
-            const char *p = cmd->valuestring;
-            while ((p = strstr(p, "cd ")) != NULL)
-            {
-               /* Only match "cd" at start of command or after a separator */
-               if (p != cmd->valuestring)
-               {
-                  char prev = *(p - 1);
-                  if (prev != ' ' && prev != '\t' && prev != ';' && prev != '&' && prev != '|')
-                  {
-                     p += 3;
-                     continue;
-                  }
-               }
-               const char *start = p + 3;
-               while (*start == ' ' || *start == '\t')
-                  start++;
-               if (!*start)
-                  break;
-               /* Extract the cd target path (up to next separator or end) */
-               char cd_target[MAX_PATH_LEN];
-               int ti = 0;
-               char quote = 0;
-               for (const char *c = start; *c && ti < (int)sizeof(cd_target) - 1; c++)
-               {
-                  if (!quote && (*c == '\'' || *c == '"'))
-                  {
-                     quote = *c;
-                     continue;
-                  }
-                  if (quote && *c == quote)
-                  {
-                     quote = 0;
-                     continue;
-                  }
-                  if (!quote && (*c == ' ' || *c == '\t' || *c == ';' || *c == '&' || *c == '|'))
-                     break;
-                  cd_target[ti++] = *c;
-               }
-               cd_target[ti] = '\0';
-               if (ti > 0)
-               {
-                  char cd_norm[MAX_PATH_LEN];
-                  normalize_path(cd_target, cwd, cd_norm, sizeof(cd_norm));
-                  const char *cd_wt = worktree_for_path(state, &wcfg, cd_norm);
-                  if (cd_wt)
-                  {
-                     fprintf(stderr,
-                             "aimee: worktree check: tool=Bash cd_target=%s -> BLOCKED (wt=%s)\n",
-                             cd_norm, cd_wt);
-                     snprintf(msg_buf, msg_len,
-                              "BLOCKED: write command cd's into real workspace directory. "
-                              "Use worktree instead: %s",
-                              cd_wt);
-                     cJSON_Delete(root);
-                     return 2;
-                  }
-               }
-               p = start;
-            }
-         }
-
-         char *paths[32];
-         int pcount = extract_paths_shlex(cmd->valuestring, paths, 32);
-         for (int i = 0; i < pcount; i++)
-         {
-            normalize_path(paths[i], cwd, norm, sizeof(norm));
-            const char *wt = worktree_for_path(state, &wcfg, norm);
-            if (wt)
-            {
-               fprintf(stderr, "aimee: worktree check: tool=Bash path=%s -> BLOCKED (wt=%s)\n",
-                       norm, wt);
-               snprintf(msg_buf, msg_len,
-                        "BLOCKED: write command targets real workspace path. "
-                        "Use worktree instead: %s",
-                        wt);
-               for (int j = i; j < pcount; j++)
-                  free(paths[j]);
-               cJSON_Delete(root);
-               return 2;
-            }
-            free(paths[i]);
-         }
-         fprintf(stderr, "aimee: worktree check: tool=Bash cmd='%.80s' -> ALLOWED\n",
-                 cmd->valuestring);
-      }
-
-      /* If the CWD is inside a .claude/worktrees/ subdirectory, the agent is
-       * operating from a Claude Code worktree.  Reads via absolute paths back
-       * into the original workspace are expected and should not be blocked. */
-      int cwd_in_cc_worktree = 0;
-      for (int ci = 0; ci < wcfg.workspace_count; ci++)
-      {
-         size_t wlen = strlen(wcfg.workspaces[ci]);
-         if (wlen == 0)
-            continue;
-         if (strncmp(cwd, wcfg.workspaces[ci], wlen) == 0 &&
-             (cwd[wlen] == '/' || cwd[wlen] == '\0'))
-         {
-            const char *rem = cwd + wlen;
-            if (rem[0] == '/')
-               rem++;
-            if (strncmp(rem, ".claude/worktrees/", 18) == 0)
-            {
-               cwd_in_cc_worktree = 1;
-               break;
-            }
-         }
-      }
-
-      /* Block reads (Read/Glob/Grep) to real workspace paths — but only if the
-       * worktree has already been created. Before the first write, reads can go
-       * to the original repo safely (non-mutating). This avoids eagerly creating
-       * worktrees just because a file was read.
-       * Skip enforcement entirely when the CWD is a Claude Code worktree. */
-      if (!cwd_in_cc_worktree && strcmp(tool_name, "Read") == 0 && fp && cJSON_IsString(fp))
-      {
-         normalize_path(fp->valuestring, cwd, norm, sizeof(norm));
-         const char *wt = worktree_for_path_if_created(state, &wcfg, norm);
-         if (wt)
-         {
-            snprintf(msg_buf, msg_len,
-                     "BLOCKED: Read targets real workspace path. Use worktree instead: %s", wt);
-            cJSON_Delete(root);
-            return 2;
-         }
-      }
-      if (!cwd_in_cc_worktree && (strcmp(tool_name, "Glob") == 0 || strcmp(tool_name, "Grep") == 0))
-      {
-         cJSON *p = cJSON_GetObjectItem(root, "path");
-         const char *check = NULL;
-         if (p && cJSON_IsString(p))
-         {
-            normalize_path(p->valuestring, cwd, norm, sizeof(norm));
-            check = norm;
-         }
-         else
-         {
-            /* No explicit path — check cwd */
-            check = cwd;
-         }
-         if (check)
-         {
-            const char *wt = worktree_for_path_if_created(state, &wcfg, check);
-            if (wt)
-            {
-               snprintf(msg_buf, msg_len,
-                        "BLOCKED: %s targets real workspace path. Use worktree instead: %s",
-                        tool_name, wt);
-               cJSON_Delete(root);
-               return 2;
-            }
-         }
+         snprintf(msg_buf, msg_len,
+                  "BLOCKED: branch has a merged PR. Do not push to merged branches. "
+                  "Create a new branch for new work.");
+         cJSON_Delete(root);
+         return 2;
       }
    }
 
@@ -1278,10 +936,6 @@ void session_state_load(session_state_t *state, const char *path)
    if (tid && cJSON_IsNumber(tid))
       state->active_task_id = (int64_t)tid->valuedouble;
 
-   cJSON *fm = cJSON_GetObjectItem(root, "fetched_mask");
-   if (fm && cJSON_IsNumber(fm))
-      state->fetched_mask = (uint16_t)fm->valuedouble;
-
    cJSON *hcc = cJSON_GetObjectItem(root, "hook_call_count");
    if (hcc && cJSON_IsNumber(hcc))
       state->hook_call_count = (int)hcc->valuedouble;
@@ -1301,64 +955,24 @@ void session_state_load(session_state_t *state, const char *path)
       }
    }
 
+   /* Worktree mappings: array of {git_root, worktree_path} objects */
    cJSON *wt = cJSON_GetObjectItem(root, "worktrees");
-   if (wt && cJSON_IsObject(wt))
+   if (wt && cJSON_IsArray(wt))
    {
-      cJSON *entry = NULL;
-      cJSON_ArrayForEach(entry, wt)
+      int sz = cJSON_GetArraySize(wt);
+      for (int i = 0; i < sz && state->worktree_count < MAX_WORKTREES; i++)
       {
-         if (state->worktree_count >= MAX_WORKTREES)
-            break;
-         if (cJSON_IsString(entry) && entry->string && entry->valuestring[0])
-         {
-            /* Legacy format: {"name": "path"} — treat as already created */
-            worktree_entry_t *w = &state->worktrees[state->worktree_count];
-            snprintf(w->name, sizeof(w->name), "%s", entry->string);
-            snprintf(w->path, sizeof(w->path), "%s", entry->valuestring);
-            w->workspace_root[0] = '\0';
-            w->created = 1;
-            state->worktree_count++;
-         }
-         else if (cJSON_IsObject(entry) && entry->string)
-         {
-            /* New format: {"name": {"path": "...", "workspace_root": "...", "created": N}} */
-            worktree_entry_t *w = &state->worktrees[state->worktree_count];
-            snprintf(w->name, sizeof(w->name), "%s", entry->string);
-            cJSON *p = cJSON_GetObjectItem(entry, "path");
-            cJSON *wr = cJSON_GetObjectItem(entry, "workspace_root");
-            cJSON *cr = cJSON_GetObjectItem(entry, "created");
-            cJSON *bb = cJSON_GetObjectItem(entry, "base_branch");
-            if (p && cJSON_IsString(p))
-               snprintf(w->path, sizeof(w->path), "%s", p->valuestring);
-            if (wr && cJSON_IsString(wr))
-               snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", wr->valuestring);
-            else
-               w->workspace_root[0] = '\0';
-            if (bb && cJSON_IsString(bb))
-               snprintf(w->base_branch, sizeof(w->base_branch), "%s", bb->valuestring);
-            else
-               w->base_branch[0] = '\0';
-            w->created = (cr && cJSON_IsNumber(cr)) ? (int)cr->valuedouble : 1;
-            state->worktree_count++;
-         }
-      }
-   }
-
-   cJSON *pmh = cJSON_GetObjectItem(root, "prev_main_head");
-   if (pmh && cJSON_IsObject(pmh))
-   {
-      cJSON *item = NULL;
-      cJSON_ArrayForEach(item, pmh)
-      {
-         if (!item->string || !cJSON_IsString(item))
+         cJSON *entry = cJSON_GetArrayItem(wt, i);
+         if (!entry || !cJSON_IsObject(entry))
             continue;
-         for (int i = 0; i < state->worktree_count; i++)
+         cJSON *gr = cJSON_GetObjectItem(entry, "git_root");
+         cJSON *wp = cJSON_GetObjectItem(entry, "worktree_path");
+         if (gr && cJSON_IsString(gr) && wp && cJSON_IsString(wp))
          {
-            if (strcmp(state->worktrees[i].name, item->string) == 0)
-            {
-               snprintf(state->prev_main_head[i], 64, "%s", item->valuestring);
-               break;
-            }
+            worktree_mapping_t *m = &state->worktrees[state->worktree_count];
+            snprintf(m->git_root, sizeof(m->git_root), "%s", gr->valuestring);
+            snprintf(m->worktree_path, sizeof(m->worktree_path), "%s", wp->valuestring);
+            state->worktree_count++;
          }
       }
    }
@@ -1372,7 +986,6 @@ static void write_state_json(const session_state_t *state, const char *path)
    cJSON_AddStringToObject(root, "session_mode", state->session_mode);
    cJSON_AddStringToObject(root, "guardrail_mode", state->guardrail_mode);
    cJSON_AddNumberToObject(root, "active_task_id", (double)state->active_task_id);
-   cJSON_AddNumberToObject(root, "fetched_mask", (double)state->fetched_mask);
    cJSON_AddNumberToObject(root, "hook_call_count", (double)state->hook_call_count);
 
    cJSON *arr = cJSON_CreateArray();
@@ -1382,42 +995,15 @@ static void write_state_json(const session_state_t *state, const char *path)
 
    if (state->worktree_count > 0)
    {
-      cJSON *wt = cJSON_CreateObject();
+      cJSON *wt = cJSON_CreateArray();
       for (int i = 0; i < state->worktree_count; i++)
       {
          cJSON *entry = cJSON_CreateObject();
-         cJSON_AddStringToObject(entry, "path", state->worktrees[i].path);
-         if (state->worktrees[i].workspace_root[0])
-            cJSON_AddStringToObject(entry, "workspace_root", state->worktrees[i].workspace_root);
-         if (state->worktrees[i].base_branch[0])
-            cJSON_AddStringToObject(entry, "base_branch", state->worktrees[i].base_branch);
-         cJSON_AddNumberToObject(entry, "created", state->worktrees[i].created);
-         cJSON_AddItemToObject(wt, state->worktrees[i].name, entry);
+         cJSON_AddStringToObject(entry, "git_root", state->worktrees[i].git_root);
+         cJSON_AddStringToObject(entry, "worktree_path", state->worktrees[i].worktree_path);
+         cJSON_AddItemToArray(wt, entry);
       }
       cJSON_AddItemToObject(root, "worktrees", wt);
-   }
-
-   /* Serialize prev_main_head map */
-   {
-      int has_any = 0;
-      for (int i = 0; i < state->worktree_count; i++)
-      {
-         if (state->prev_main_head[i][0])
-         {
-            has_any = 1;
-            break;
-         }
-      }
-      if (has_any)
-      {
-         cJSON *pmh = cJSON_CreateObject();
-         for (int i = 0; i < state->worktree_count; i++)
-         {
-            if (state->prev_main_head[i][0])
-               cJSON_AddStringToObject(pmh, state->worktrees[i].name, state->prev_main_head[i]);
-         }
-         cJSON_AddItemToObject(root, "prev_main_head", pmh);
-      }
    }
 
    char *json = cJSON_PrintUnformatted(root);
@@ -1468,31 +1054,4 @@ int git_repo_root(const char *dir, char *out_root, size_t out_len)
    return 0;
 }
 
-/* Single place where workspace_root is set. Resolves any directory to the git
- * repo root, deduplicates, and appends to state->worktrees. */
-int worktree_entry_init(session_state_t *state, const char *dir, const char *sid)
-{
-   if (state->worktree_count >= MAX_WORKTREES)
-      return -1;
-
-   char git_root[MAX_PATH_LEN];
-   if (git_repo_root(dir, git_root, sizeof(git_root)) != 0)
-      return -1;
-
-   for (int i = 0; i < state->worktree_count; i++)
-   {
-      if (strcmp(state->worktrees[i].workspace_root, git_root) == 0)
-         return 0;
-   }
-
-   const char *slash = strrchr(git_root, '/');
-   const char *ws_name = slash ? slash + 1 : git_root;
-
-   worktree_entry_t *w = &state->worktrees[state->worktree_count];
-   snprintf(w->name, sizeof(w->name), "%s", ws_name);
-   snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid, ws_name);
-   snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", git_root);
-   w->created = 0;
-   state->worktree_count++;
-   return 0;
-}
+/* (worktree_entry_init removed — replaced by simple sibling worktree model) */
