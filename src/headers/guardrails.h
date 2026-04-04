@@ -105,6 +105,15 @@ const char *worktree_resolve_path(session_state_t *state, const char *name);
  * worktree, or NULL if no worktree applies. Ensures the worktree is created. */
 const char *worktree_for_path(session_state_t *state, const config_t *cfg, const char *norm_path);
 
+/* Initialize a worktree entry from any directory path. Resolves to the git
+ * repo root, deduplicates, and appends to state->worktrees. Returns 0 on
+ * success. This is the single place where workspace_root is set — enforcing
+ * that worktrees are always rooted at the .git root, never a subdirectory. */
+int worktree_entry_init(session_state_t *state, const char *dir, const char *sid);
+
+/* Resolve the git repository root for a directory. Returns 0 on success. */
+int git_repo_root(const char *dir, char *out_root, size_t out_len);
+
 /* Register a worktree creation in the database (best-effort). */
 void worktree_db_register(const char *sid, const char *workspace, const char *path);
 

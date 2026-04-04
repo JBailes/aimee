@@ -14,6 +14,12 @@
 #define GIT_BUF_SIZE 65536
 #define SUMMARY_MAX  4096
 
+/* Track whether the current MCP git operation is running in a worktree. */
+static int s_in_worktree = 0;
+
+void mcp_git_set_worktree(int val) { s_in_worktree = val; }
+int mcp_git_get_worktree(void) { return s_in_worktree; }
+
 /* --- Helpers --- */
 
 static cJSON *mcp_text(const char *text)
@@ -536,14 +542,25 @@ cJSON *handle_git_push(cJSON *args)
       }
    }
 
-   /* Check if upstream exists */
+   /* Check if upstream exists and whether it matches the local branch name */
    char *upstream = run_cmd("git rev-parse --abbrev-ref @{upstream} 2>&1", &rc);
    int has_upstream = (rc == 0);
+   int upstream_matches = 0;
+   if (has_upstream && upstream)
+   {
+      /* upstream is like "origin/branch-name" — compare suffix after '/' */
+      char *slash = strchr(upstream, '/');
+      const char *upstream_branch = slash ? slash + 1 : upstream;
+      char *up_nl = strchr(upstream_branch, '\n');
+      if (up_nl)
+         *up_nl = '\0';
+      upstream_matches = (strcmp(upstream_branch, branch) == 0);
+   }
    free(upstream);
 
    /* Build push command */
    char cmd[512];
-   if (has_upstream)
+   if (has_upstream && upstream_matches)
    {
       if (force)
          snprintf(cmd, sizeof(cmd), "git push --force-with-lease 2>&1");
@@ -552,7 +569,8 @@ cJSON *handle_git_push(cJSON *args)
    }
    else
    {
-      /* No upstream: push current branch to origin and set upstream */
+      /* No upstream or name mismatch (e.g., worktree branch tracking main):
+       * push current branch to origin and set upstream */
       snprintf(cmd, sizeof(cmd), "git push -u origin '%s' 2>&1", branch);
    }
 

@@ -22,6 +22,10 @@ cJSON *handle_git_fetch(cJSON *args);
 cJSON *handle_git_reset(cJSON *args);
 cJSON *handle_git_restore(cJSON *args);
 
+/* Track whether the current MCP git operation is running in a worktree. */
+void mcp_git_set_worktree(int val);
+int mcp_git_get_worktree(void);
+
 /* Change to git root directory before running git tools.
  * Saves old cwd in old_cwd. Returns 1 if chdir happened, 0 otherwise.
  * Caller should restore old_cwd when done. */
