@@ -978,14 +978,76 @@ void session_state_force_save(const session_state_t *state, const char *path)
    write_state_json(state, path);
 }
 
-/* Resolve the git repository root for a directory. Works for subdirectories
- * and git worktrees (where .git is a file, not a directory). */
+/* Resolve the git repository root for a directory. If we're inside a git
+ * worktree (e.g. Claude Code's .claude/worktrees/), resolve back to the
+ * main repository root via --git-common-dir. */
 int git_repo_root(const char *dir, char *out_root, size_t out_len)
 {
-   char cmd[MAX_PATH_LEN + 64];
-   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --show-toplevel 2>/dev/null", dir);
+   char cmd[MAX_PATH_LEN + 128];
    int rc;
+
+   /* First try: detect if we're in a worktree by comparing --git-dir and
+    * --git-common-dir. If they differ, --git-common-dir points to the main
+    * repo's .git directory, and its parent is the true project root. */
+   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --git-dir --git-common-dir 2>/dev/null", dir);
    char *out = run_cmd(cmd, &rc);
+   if (rc == 0 && out && out[0])
+   {
+      /* Output is two lines: git-dir\ngit-common-dir\n */
+      char *nl = strchr(out, '\n');
+      if (nl)
+      {
+         *nl = '\0';
+         char *git_dir = out;
+         char *common_dir = nl + 1;
+         /* Trim trailing newline from common_dir */
+         size_t clen = strlen(common_dir);
+         while (clen > 0 && (common_dir[clen - 1] == '\n' || common_dir[clen - 1] == '\r'))
+            common_dir[--clen] = '\0';
+
+         if (strcmp(git_dir, common_dir) != 0 && clen > 0)
+         {
+            /* We're in a worktree. common_dir is the main repo's .git dir.
+             * Resolve it to an absolute path, then take its parent. */
+            char abs_common[MAX_PATH_LEN];
+            if (common_dir[0] == '/')
+            {
+               snprintf(abs_common, sizeof(abs_common), "%s", common_dir);
+            }
+            else
+            {
+               /* Relative path — resolve relative to git-dir */
+               char abs_git_dir[MAX_PATH_LEN];
+               if (git_dir[0] == '/')
+                  snprintf(abs_git_dir, sizeof(abs_git_dir), "%s", git_dir);
+               else
+                  snprintf(abs_git_dir, sizeof(abs_git_dir), "%s/%s", dir, git_dir);
+
+               snprintf(abs_common, sizeof(abs_common), "%s/%s", abs_git_dir, common_dir);
+            }
+
+            /* Canonicalize to resolve any ../ components */
+            char *resolved = realpath(abs_common, NULL);
+            if (resolved)
+            {
+               /* Strip trailing /.git to get repo root */
+               size_t rlen = strlen(resolved);
+               if (rlen >= 5 && strcmp(resolved + rlen - 5, "/.git") == 0)
+                  resolved[rlen - 5] = '\0';
+               snprintf(out_root, out_len, "%s", resolved);
+               free(resolved);
+               free(out);
+               return 0;
+            }
+            free(resolved);
+         }
+      }
+   }
+   free(out);
+
+   /* Fallback: simple --show-toplevel (works for non-worktree repos) */
+   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --show-toplevel 2>/dev/null", dir);
+   out = run_cmd(cmd, &rc);
    if (rc != 0 || !out || !out[0])
    {
       free(out);
