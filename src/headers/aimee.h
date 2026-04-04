@@ -40,7 +40,8 @@
 #define KIND_SCRATCH    "scratch"
 #define KIND_PROCEDURE  "procedure"
 #define KIND_POLICY     "policy"
-#define KIND_COUNT      8
+#define KIND_WORKFLOW   "workflow"
+#define KIND_COUNT      9
 
 /* Promotion thresholds */
 #define PROMOTE_L1_USE_COUNT  3
@@ -124,14 +125,22 @@ typedef struct
    config_t *cfg; /* pre-loaded config (NULL if not available) */
 } app_ctx_t;
 
-/* Command registry: each command is a {name, help, handler} triple. */
+/* Command registry: each command is a {name, help, handler, tier} entry. */
 typedef void (*cmd_handler_t)(app_ctx_t *ctx, int argc, char **argv);
+
+typedef enum
+{
+   CMD_TIER_CORE,     /* session, hooks, memory, rules, config, index, delegate */
+   CMD_TIER_ADVANCED, /* workspace, worktree, trace, jobs, plans, status, work */
+   CMD_TIER_ADMIN     /* dashboard, webchat, eval, import/export, db, branch, git */
+} cmd_tier_t;
 
 typedef struct
 {
    const char *name;
    const char *help;
    cmd_handler_t handler;
+   cmd_tier_t tier;
 } command_t;
 
 /* Utility: fatal error (exits) */
