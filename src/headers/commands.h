@@ -65,9 +65,13 @@ void cmd_wrapup(app_ctx_t *ctx, int argc, char **argv);
 
 /* cmd_agent.c */
 void cmd_agent(app_ctx_t *ctx, int argc, char **argv);
+
+/* cmd_agent_delegate.c */
 void cmd_delegate(app_ctx_t *ctx, int argc, char **argv);
 void cmd_delegate_status(app_ctx_t *ctx, int argc, char **argv);
 void cmd_verify(app_ctx_t *ctx, int argc, char **argv);
+
+/* cmd_agent_trace.c */
 void cmd_dispatch(app_ctx_t *ctx, int argc, char **argv);
 void cmd_queue(app_ctx_t *ctx, int argc, char **argv);
 void cmd_context(app_ctx_t *ctx, int argc, char **argv);
