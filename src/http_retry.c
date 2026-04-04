@@ -6,16 +6,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-static const int RETRYABLE_STATUS[] = {
-    408, /* Request Timeout */
-    409, /* Conflict (temporary contention) */
-    429, /* Too Many Requests (rate limit) */
-    500, /* Internal Server Error */
-    502, /* Bad Gateway */
-    503, /* Service Unavailable */
-    504, /* Gateway Timeout */
-    0
-};
+static const int RETRYABLE_STATUS[] = {408, /* Request Timeout */
+                                       409, /* Conflict (temporary contention) */
+                                       429, /* Too Many Requests (rate limit) */
+                                       500, /* Internal Server Error */
+                                       502, /* Bad Gateway */
+                                       503, /* Service Unavailable */
+                                       504, /* Gateway Timeout */
+                                       0};
 
 int http_should_retry(int http_status)
 {
@@ -58,9 +56,9 @@ int http_backoff_ms(int attempt, int base_ms, int max_ms)
    return delay;
 }
 
-int http_retry_post(const char *url, const char *auth_header, const char *body,
-                    char **response_buf, int timeout_ms, const char *extra_headers,
-                    int max_attempts, int base_ms, int max_ms)
+int http_retry_post(const char *url, const char *auth_header, const char *body, char **response_buf,
+                    int timeout_ms, const char *extra_headers, int max_attempts, int base_ms,
+                    int max_ms)
 {
    if (max_attempts <= 0)
       max_attempts = 1; /* at least one attempt */
@@ -85,8 +83,8 @@ int http_retry_post(const char *url, const char *auth_header, const char *body,
          *response_buf = NULL;
       }
 
-      http_status = agent_http_post(url, auth_header, body, response_buf, timeout_ms,
-                                    extra_headers);
+      http_status =
+          agent_http_post(url, auth_header, body, response_buf, timeout_ms, extra_headers);
 
       /* Success or non-retryable error: return immediately */
       if (!http_should_retry(http_status))

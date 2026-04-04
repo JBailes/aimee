@@ -253,8 +253,8 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
 
       config_t retry_cfg;
       config_load(&retry_cfg);
-      int ra = retry_cfg.retry_max_attempts > 0 ? retry_cfg.retry_max_attempts
-                                                 : HTTP_RETRY_MAX_ATTEMPTS;
+      int ra =
+          retry_cfg.retry_max_attempts > 0 ? retry_cfg.retry_max_attempts : HTTP_RETRY_MAX_ATTEMPTS;
       int rb = retry_cfg.retry_base_ms > 0 ? retry_cfg.retry_base_ms : HTTP_RETRY_BASE_MS;
       int rm = retry_cfg.retry_max_ms > 0 ? retry_cfg.retry_max_ms : HTTP_RETRY_MAX_MS;
 
