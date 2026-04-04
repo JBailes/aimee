@@ -79,7 +79,7 @@ AGENT_OBJS = $(AGENT_SRCS:%.c=$(OBJDIR)/%.o)
 # --- Layer 3: Commands + UI (cmd_*, webchat, dashboard) ---
 CMD_SRCS = cmd_core.c cmd_data.c cmd_infra.c cmd_memory.c cmd_index.c cmd_rules.c \
            cmd_hooks.c cmd_agent.c cmd_agent_setup.c cmd_agent_trace.c cmd_agent_delegate.c cmd_agent_plan.c \
-           cmd_chat.c cmd_wm.c cmd_work.c cmd_branch.c cmd_util.c cmd_table.c \
+           cmd_chat.c cmd_wm.c cmd_work.c cmd_branch.c cmd_util.c cmd_table.c cmd_doctor.c \
            dashboard.c webchat.c
 CMD_OBJS = $(CMD_SRCS:%.c=$(OBJDIR)/%.o)
 

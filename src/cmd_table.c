@@ -134,6 +134,7 @@ const command_t commands[] = {
     {"contract", "Show project contract for current directory", cmd_contract, CMD_TIER_ADVANCED},
     {"describe", "Auto-describe projects via agent analysis", cmd_describe, CMD_TIER_ADVANCED},
     {"env", "Detect environment capabilities", cmd_env, CMD_TIER_ADVANCED},
+    {"doctor", "Run diagnostic checks on all subsystems", cmd_doctor, CMD_TIER_ADVANCED},
 
     /* Admin: dashboard, webchat, eval, import/export, db, branch, git */
     {"dashboard", "Serve the dashboard UI", cmd_dashboard, CMD_TIER_ADMIN},

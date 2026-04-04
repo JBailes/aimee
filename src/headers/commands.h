@@ -43,6 +43,7 @@ void cmd_db(app_ctx_t *ctx, int argc, char **argv);
 void cmd_worktree(app_ctx_t *ctx, int argc, char **argv);
 void cmd_config(app_ctx_t *ctx, int argc, char **argv);
 void cmd_git(app_ctx_t *ctx, int argc, char **argv);
+void cmd_doctor(app_ctx_t *ctx, int argc, char **argv);
 void cmd_usage(app_ctx_t *ctx, int argc, char **argv);
 
 /* cmd_memory.c */
