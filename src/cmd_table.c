@@ -144,6 +144,7 @@ const command_t commands[] = {
     {"db", "Database diagnostics and maintenance", cmd_db, CMD_TIER_ADMIN},
     {"branch", "Branch conflict analysis and cascading merge", cmd_branch, CMD_TIER_ADMIN},
     {"git", "Git and PR operations", cmd_git, CMD_TIER_ADMIN},
+    {"clean", "Remove all aimee data and hooks (use --force)", NULL, CMD_TIER_ADMIN},
 
     {NULL, NULL, NULL, 0} /* sentinel */
 };

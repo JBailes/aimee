@@ -442,6 +442,157 @@ static int launch_session(int json_output, int debug)
    return exit_code;
 }
 
+/* --- aimee clean [--force] --- */
+
+/* Remove aimee hooks and MCP entries from a JSON settings file. */
+static int clean_settings_file(const char *path)
+{
+   FILE *fp = fopen(path, "r");
+   if (!fp)
+      return 0;
+   fseek(fp, 0, SEEK_END);
+   long sz = ftell(fp);
+   fseek(fp, 0, SEEK_SET);
+   if (sz <= 0 || sz >= (1L << 20))
+   {
+      fclose(fp);
+      return 0;
+   }
+   char *buf = malloc((size_t)sz + 1);
+   if (!buf)
+   {
+      fclose(fp);
+      return -1;
+   }
+   size_t n = fread(buf, 1, (size_t)sz, fp);
+   fclose(fp);
+   buf[n] = '\0';
+
+   cJSON *root = cJSON_Parse(buf);
+   free(buf);
+   if (!root)
+      return 0;
+
+   int changed = 0;
+
+   /* Remove aimee entries from all hook events */
+   cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
+   if (hooks && cJSON_IsObject(hooks))
+   {
+      cJSON *event = NULL;
+      cJSON_ArrayForEach(event, hooks)
+      {
+         if (!cJSON_IsArray(event))
+            continue;
+         for (int i = cJSON_GetArraySize(event) - 1; i >= 0; i--)
+         {
+            cJSON *entry = cJSON_GetArrayItem(event, i);
+            cJSON *hlist = cJSON_GetObjectItemCaseSensitive(entry, "hooks");
+            if (!hlist || !cJSON_IsArray(hlist))
+               continue;
+            cJSON *h = NULL;
+            cJSON_ArrayForEach(h, hlist)
+            {
+               cJSON *c = cJSON_GetObjectItemCaseSensitive(h, "command");
+               if (c && cJSON_IsString(c) && strstr(c->valuestring, "aimee"))
+               {
+                  cJSON_DeleteItemFromArray(event, i);
+                  changed = 1;
+                  break;
+               }
+            }
+         }
+      }
+   }
+
+   /* Remove aimee MCP server */
+   cJSON *mcp = cJSON_GetObjectItemCaseSensitive(root, "mcpServers");
+   if (mcp && cJSON_HasObjectItem(mcp, "aimee"))
+   {
+      cJSON_DeleteItemFromObjectCaseSensitive(mcp, "aimee");
+      changed = 1;
+   }
+
+   if (changed)
+   {
+      char *out = cJSON_Print(root);
+      cJSON_Delete(root);
+      if (!out)
+         return -1;
+      fp = fopen(path, "w");
+      if (!fp)
+      {
+         free(out);
+         return -1;
+      }
+      fputs(out, fp);
+      fputc('\n', fp);
+      fclose(fp);
+      free(out);
+      fprintf(stderr, "  cleaned %s\n", path);
+   }
+   else
+   {
+      cJSON_Delete(root);
+   }
+   return 0;
+}
+
+static int cli_clean(int argc, char **argv)
+{
+   int force = 0;
+   for (int i = 0; i < argc; i++)
+   {
+      if (strcmp(argv[i], "--force") == 0)
+         force = 1;
+   }
+
+   const char *home = getenv("HOME");
+   if (!home)
+      home = "/tmp";
+
+   char config_dir[MAX_PATH_LEN];
+   snprintf(config_dir, sizeof(config_dir), "%s/.config/aimee", home);
+
+   if (!force)
+   {
+      fprintf(stderr,
+              "This will remove all aimee data:\n"
+              "  %s/          (config, database, keys, logs)\n\n"
+              "And clean aimee hooks/MCP entries from:\n"
+              "  ~/.claude/settings.json\n"
+              "  ~/.gemini/settings.json\n"
+              "  ~/.codex/hooks.json, ~/.codex/mcp-config.json\n"
+              "  ~/.copilot/config.json, ~/.copilot/mcp-config.json\n\n"
+              "Run with --force to proceed.\n",
+              config_dir);
+      return 0;
+   }
+
+   fprintf(stderr, "Cleaning aimee installation...\n");
+
+   /* Remove aimee config directory */
+   char cmd[MAX_PATH_LEN + 32];
+   snprintf(cmd, sizeof(cmd), "rm -rf '%s'", config_dir);
+   (void)system(cmd);
+   fprintf(stderr, "  removed %s\n", config_dir);
+
+   /* Clean hooks and MCP entries from tool settings files */
+   static const char *settings_files[] = {
+       "%s/.claude/settings.json",  "%s/.gemini/settings.json", "%s/.codex/hooks.json",
+       "%s/.codex/mcp-config.json", "%s/.copilot/config.json",  "%s/.copilot/mcp-config.json",
+   };
+   char path[MAX_PATH_LEN];
+   for (size_t i = 0; i < sizeof(settings_files) / sizeof(settings_files[0]); i++)
+   {
+      snprintf(path, sizeof(path), settings_files[i], home);
+      clean_settings_file(path);
+   }
+
+   fprintf(stderr, "Done. Run 'aimee init' to set up fresh.\n");
+   return 0;
+}
+
 int main(int argc, char **argv)
 {
    int json_output = 0;
@@ -501,6 +652,10 @@ int main(int argc, char **argv)
          return 0;
       return forward_command("help", sub_argc, sub_argv, json_output, NULL);
    }
+
+   /* Clean: runs locally, no server needed */
+   if (strcmp(cmd, "clean") == 0)
+      return cli_clean(sub_argc, sub_argv);
 
    /* MCP stdio proxy (replaces standalone aimee-mcp binary) */
    if (strcmp(cmd, "mcp-serve") == 0)

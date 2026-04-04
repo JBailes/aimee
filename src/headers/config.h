@@ -19,9 +19,6 @@ typedef struct config
    /* Embedding command: piped text on stdin, returns JSON float array on stdout */
    char embedding_command[512];
 
-   /* Block raw git/gh commands from primary agents, redirecting to MCP git tools */
-   int block_raw_git;
-
    /* Autonomous mode: launch agent CLIs with skip-permissions flags,
     * relying solely on aimee guardrails for safety */
    int autonomous;

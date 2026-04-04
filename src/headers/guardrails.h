@@ -67,9 +67,6 @@ void session_state_force_save(const session_state_t *state, const char *path);
 /* Check if a command is a write/destructive operation. */
 int is_write_command(const char *command);
 
-/* Check if a command is any git/gh operation (read or write). */
-int is_git_command(const char *command);
-
 /* Check if a tool is a shell/bash provider. */
 int is_shell_tool(const char *tool);
 

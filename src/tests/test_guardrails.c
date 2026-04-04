@@ -725,8 +725,8 @@ static void test_no_worktree_allows_non_workspace_writes(void)
 
 static void test_git_commands_allowed_by_default(void)
 {
-   /* Raw git/gh commands in Bash must not be blocked by default.
-    * block_raw_git defaults to 0 — regression guard against re-enabling it. */
+   /* Raw git/gh commands in Bash must not be blocked. Regression guard
+    * against reintroducing git command interception in guardrails. */
    char tmpdir[] = "/tmp/aimee-test-git-XXXXXX";
    assert(mkdtemp(tmpdir) != NULL);
    setenv("HOME", tmpdir, 1);
