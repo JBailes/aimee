@@ -27,9 +27,4 @@ cJSON *handle_git_restore(cJSON *args);
  * Caller should restore old_cwd when done. */
 int mcp_chdir_git_root(char *old_cwd, size_t old_cwd_len, cJSON *args);
 
-/* Worktree context: set by dispatch when operating inside a session worktree.
- * Handlers use this to avoid changing the worktree's checked-out branch. */
-void mcp_git_set_worktree(int in_worktree);
-int mcp_git_in_worktree(void);
-
 #endif /* DEC_MCP_GIT_H */

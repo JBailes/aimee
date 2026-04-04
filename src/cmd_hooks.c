@@ -661,8 +661,6 @@ static char *build_session_context(sqlite3 *db)
    return buf;
 }
 
-
-
 /* Remove worktrees for a single stale session directory. */
 static void remove_stale_worktrees(const config_t *cfg, const char *wt_dir, const char *sid)
 {
