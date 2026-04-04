@@ -93,11 +93,11 @@ int main(int argc, char **argv)
       socket_path = cli_default_socket_path();
 
    /* Initialize server first — creates the Unix socket so clients can connect
-    * (and queue in the listen backlog) while curl initializes. */
+    * (and queue in the listen backlog) while HTTP/SSL initializes. */
    if (server_init(&g_ctx, socket_path) != 0)
       return 1;
 
-   /* Initialize curl after socket is listening (50-500ms that no longer blocks clients) */
+   /* Initialize HTTP client after socket is listening */
    agent_http_init();
 
    /* Install signal handlers */

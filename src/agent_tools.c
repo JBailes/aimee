@@ -11,13 +11,16 @@
 #include <unistd.h>
 
 #ifndef _WIN32
-#include <curl/curl.h>
-#endif
-
-#ifndef _WIN32
 #include <glob.h>
 #include <signal.h>
 #include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netdb.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #include <sys/wait.h>
 #endif
 
@@ -503,37 +506,187 @@ char *tool_list_files(const char *path, const char *pattern)
 
 /* Item 5: Verify tool - check assertions */
 
-/* Direct HTTP status check via libcurl (no shell) */
+/* Direct HTTP HEAD status check via sockets + OpenSSL */
 static int http_head_status(const char *url)
 {
-   CURL *curl = curl_easy_init();
-   if (!curl)
-      return -1;
-   if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)
+   int use_ssl;
+   int port;
+   const char *p;
+
+   if (strncmp(url, "https://", 8) == 0)
    {
-      curl_easy_cleanup(curl);
+      use_ssl = 1;
+      port = 443;
+      p = url + 8;
+   }
+   else if (strncmp(url, "http://", 7) == 0)
+   {
+      use_ssl = 0;
+      port = 80;
+      p = url + 7;
+   }
+   else
+      return -1;
+
+   /* Parse host and path */
+   char host[256];
+   char path[2048];
+   const char *slash = strchr(p, '/');
+   const char *colon = strchr(p, ':');
+   size_t hostlen;
+
+   if (colon && (!slash || colon < slash))
+   {
+      hostlen = (size_t)(colon - p);
+      port = atoi(colon + 1);
+   }
+   else
+      hostlen = slash ? (size_t)(slash - p) : strlen(p);
+
+   if (hostlen == 0 || hostlen >= sizeof(host))
+      return -1;
+   memcpy(host, p, hostlen);
+   host[hostlen] = '\0';
+   snprintf(path, sizeof(path), "%s", slash ? slash : "/");
+
+   /* Connect with 5s timeout */
+   char port_str[16];
+   snprintf(port_str, sizeof(port_str), "%d", port);
+
+   struct addrinfo hints = {0}, *res = NULL;
+   hints.ai_family = AF_UNSPEC;
+   hints.ai_socktype = SOCK_STREAM;
+   if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res)
+      return -1;
+
+   int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+   if (fd < 0)
+   {
+      freeaddrinfo(res);
       return -1;
    }
-   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
-   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
 
-   curl_easy_setopt(curl, CURLOPT_URL, url);
-   curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+   int flags = fcntl(fd, F_GETFL, 0);
+   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
-   CURLcode res = curl_easy_perform(curl);
-   if (res != CURLE_OK)
+   int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+   freeaddrinfo(res);
+
+   if (rc < 0 && errno != EINPROGRESS)
    {
-      curl_easy_cleanup(curl);
+      close(fd);
       return -1;
    }
+   if (rc < 0)
+   {
+      struct pollfd pfd = {fd, POLLOUT, 0};
+      if (poll(&pfd, 1, 5000) <= 0)
+      {
+         close(fd);
+         return -1;
+      }
+      int err = 0;
+      socklen_t errlen = sizeof(err);
+      getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+      if (err)
+      {
+         close(fd);
+         return -1;
+      }
+   }
+   fcntl(fd, F_SETFL, flags);
 
-   long code = 0;
-   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
-   curl_easy_cleanup(curl);
-   return (int)code;
+   /* Set 10s overall timeout */
+   struct timeval tv = {10, 0};
+   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+   SSL *ssl = NULL;
+   if (use_ssl)
+   {
+      /* Re-use the global SSL_CTX from agent_http_init() via a local context */
+      SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+      if (!ctx)
+      {
+         close(fd);
+         return -1;
+      }
+      SSL_CTX_set_default_verify_paths(ctx);
+      SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+
+      ssl = SSL_new(ctx);
+      SSL_CTX_free(ctx); /* SSL holds a ref */
+      if (!ssl)
+      {
+         close(fd);
+         return -1;
+      }
+      SSL_set_fd(ssl, fd);
+      SSL_set_tlsext_host_name(ssl, host);
+      SSL_set1_host(ssl, host);
+      if (SSL_connect(ssl) <= 0)
+      {
+         SSL_free(ssl);
+         close(fd);
+         return -1;
+      }
+   }
+
+   /* Send HEAD request */
+   char req[4096];
+   int reqlen = snprintf(req, sizeof(req),
+                         "HEAD %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
+
+   if (ssl)
+   {
+      if (SSL_write(ssl, req, reqlen) <= 0)
+      {
+         SSL_shutdown(ssl);
+         SSL_free(ssl);
+         close(fd);
+         return -1;
+      }
+   }
+   else
+   {
+      if (send(fd, req, (size_t)reqlen, 0) <= 0)
+      {
+         close(fd);
+         return -1;
+      }
+   }
+
+   /* Read response status line */
+   char resp[4096];
+   int rlen = 0;
+   while (rlen < (int)sizeof(resp) - 1)
+   {
+      int n;
+      if (ssl)
+         n = SSL_read(ssl, resp + rlen, (int)sizeof(resp) - 1 - rlen);
+      else
+         n = (int)recv(fd, resp + rlen, sizeof(resp) - 1 - (size_t)rlen, 0);
+      if (n <= 0)
+         break;
+      rlen += n;
+      resp[rlen] = '\0';
+      if (strstr(resp, "\r\n"))
+         break; /* got status line at minimum */
+   }
+
+   if (ssl)
+   {
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
+   }
+   close(fd);
+
+   /* Parse "HTTP/1.x NNN" */
+   if (rlen < 12 || (strncmp(resp, "HTTP/1.0", 8) != 0 && strncmp(resp, "HTTP/1.1", 8) != 0))
+      return -1;
+
+   int code = atoi(resp + 9);
+   return (code >= 100 && code <= 999) ? code : -1;
 }
 
 char *tool_verify(const char *check_type, const char *target, const char *expected)
@@ -542,7 +695,7 @@ char *tool_verify(const char *check_type, const char *target, const char *expect
 
    if (strcmp(check_type, "http_status") == 0)
    {
-      /* Direct libcurl HEAD request (no shell) */
+      /* Direct HTTP HEAD request (no shell) */
       int code = http_head_status(target);
       if (code < 0)
       {

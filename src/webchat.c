@@ -1101,7 +1101,7 @@ static void wc_process_sse_anthropic(wc_turn_t *turn, const char *line, size_t l
    cJSON_Delete(root);
 }
 
-/* Stream callback for curl: called per chunk from AI provider */
+/* Stream callback: called per chunk from AI provider */
 static int wc_stream_cb(const char *data, size_t len, void *userdata)
 {
    wc_turn_t *turn = (wc_turn_t *)userdata;

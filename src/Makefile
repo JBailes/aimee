@@ -11,7 +11,7 @@ UNAME_S := $(shell uname -s)
 ifeq ($(OS),Windows_NT)
     HTTP_LIB = -lwinhttp
 else
-    HTTP_LIB = -lcurl
+    HTTP_LIB =
 endif
 
 # PAM support (optional: set WITH_PAM=1 to enable, auto-detected if libpam-dev present)
