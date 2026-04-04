@@ -24,10 +24,14 @@ static void usage(void)
                    "  provider [name]     Show or set the default provider\n"
                    "  verify on|off       Enable or disable cross-verification\n");
 
-   static const struct { cmd_tier_t tier; const char *label; } tiers[] = {
-      {CMD_TIER_CORE,     "Core commands"},
-      {CMD_TIER_ADVANCED, "Advanced commands"},
-      {CMD_TIER_ADMIN,    "Admin commands"},
+   static const struct
+   {
+      cmd_tier_t tier;
+      const char *label;
+   } tiers[] = {
+       {CMD_TIER_CORE, "Core commands"},
+       {CMD_TIER_ADVANCED, "Advanced commands"},
+       {CMD_TIER_ADMIN, "Admin commands"},
    };
 
    for (int t = 0; t < 3; t++)

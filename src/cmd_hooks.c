@@ -198,10 +198,14 @@ char *build_capabilities_text(void)
                            "Common shortcuts: `aimee use <provider>`, `aimee provider [name]`, "
                            "`aimee verify on|off`.\n\n");
 
-   static const struct { cmd_tier_t tier; const char *label; } tiers[] = {
-      {CMD_TIER_CORE,     "Core"},
-      {CMD_TIER_ADVANCED, "Advanced"},
-      {CMD_TIER_ADMIN,    "Admin"},
+   static const struct
+   {
+      cmd_tier_t tier;
+      const char *label;
+   } tiers[] = {
+       {CMD_TIER_CORE, "Core"},
+       {CMD_TIER_ADVANCED, "Advanced"},
+       {CMD_TIER_ADMIN, "Admin"},
    };
 
    for (int t = 0; t < 3 && pos < cap - 256; t++)
@@ -211,7 +215,8 @@ char *build_capabilities_text(void)
       {
          if (commands[i].tier != tiers[t].tier)
             continue;
-         if (command_is_hidden_default(commands[i].name) || strcmp(commands[i].name, "version") == 0)
+         if (command_is_hidden_default(commands[i].name) ||
+             strcmp(commands[i].name, "version") == 0)
             continue;
          pos += (size_t)snprintf(buf + pos, cap - pos, "- `aimee %s` -- %s\n", commands[i].name,
                                  commands[i].help);
@@ -451,7 +456,8 @@ static char *build_session_context(sqlite3 *db)
                      const char *kind = (const char *)sqlite3_column_text(lstmt, 2);
                      const char *text = (val && val[0]) ? val : (key ? key : "");
                      if (kind && kind[0])
-                        pos += (size_t)snprintf(buf + pos, cap - pos, "- [%s] %.300s\n", kind, text);
+                        pos +=
+                            (size_t)snprintf(buf + pos, cap - pos, "- [%s] %.300s\n", kind, text);
                      else
                         pos += (size_t)snprintf(buf + pos, cap - pos, "- %.300s\n", text);
                   }
