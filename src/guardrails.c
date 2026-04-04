@@ -688,9 +688,8 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
     * create worktree entries on the fly so enforcement kicks in. This prevents writes
     * to the real repo when session-start didn't run (e.g., MCP tools, late hook setup). */
    if (state->worktree_count == 0 &&
-       (is_edit_tool(tool_name) ||
-        (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
-         is_write_command(cmd->valuestring))))
+       (is_edit_tool(tool_name) || (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
+                                    is_write_command(cmd->valuestring))))
    {
       config_t acfg;
       config_load(&acfg);
@@ -766,8 +765,8 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
 
                   worktree_entry_t *w = &state->worktrees[state->worktree_count];
                   snprintf(w->name, sizeof(w->name), "%s", ws_name);
-                  snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(),
-                           sid, ws_name);
+                  snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid,
+                           ws_name);
                   snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", cwd);
                   w->created = 0;
                   state->worktree_count++;
@@ -776,8 +775,7 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
          }
 
          state->dirty = 1;
-         fprintf(stderr,
-                 "aimee: auto-provisioned %d worktree(s) — session-start did not run\n",
+         fprintf(stderr, "aimee: auto-provisioned %d worktree(s) — session-start did not run\n",
                  state->worktree_count);
 
          /* Eagerly create the worktree for the targeted workspace */

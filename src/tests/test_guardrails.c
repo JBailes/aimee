@@ -794,8 +794,8 @@ static void test_no_worktree_allows_non_workspace_writes(void)
 
    /* Bash write to /tmp should be allowed */
    msg[0] = '\0';
-   rc = pre_tool_check(db, "Bash", "{\"command\":\"echo x > /tmp/test.c\"}", &state,
-                       MODE_APPROVE, "/tmp", msg, sizeof(msg));
+   rc = pre_tool_check(db, "Bash", "{\"command\":\"echo x > /tmp/test.c\"}", &state, MODE_APPROVE,
+                       "/tmp", msg, sizeof(msg));
    assert(rc == 0);
 
    db_stmt_cache_clear();
