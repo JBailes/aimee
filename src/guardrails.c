@@ -722,6 +722,42 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
          }
       }
 
+      /* If either the write target or CWD is inside a .claude/worktrees/
+       * subdirectory of a configured workspace, the agent is already in a
+       * Claude Code worktree — do not auto-provision or block. */
+      if (matched_ws >= 0)
+      {
+         const char *wt_remainder = write_target + best_len;
+         if (wt_remainder[0] == '/')
+            wt_remainder++;
+         if (strncmp(wt_remainder, ".claude/worktrees/", 18) == 0)
+            matched_ws = -1;
+      }
+      if (matched_ws >= 0 && cwd[0])
+      {
+         /* Also check CWD — Bash tool uses CWD as write_target, but the
+          * actual CWD may be a Claude Code worktree even though the aimee
+          * workspace root matches as a prefix. */
+         for (int i = 0; i < acfg.workspace_count; i++)
+         {
+            size_t wlen = strlen(acfg.workspaces[i]);
+            if (wlen == 0)
+               continue;
+            if (strncmp(cwd, acfg.workspaces[i], wlen) == 0 &&
+                (cwd[wlen] == '/' || cwd[wlen] == '\0'))
+            {
+               const char *cwd_remainder = cwd + wlen;
+               if (cwd_remainder[0] == '/')
+                  cwd_remainder++;
+               if (strncmp(cwd_remainder, ".claude/worktrees/", 18) == 0)
+               {
+                  matched_ws = -1;
+                  break;
+               }
+            }
+         }
+      }
+
       if (matched_ws >= 0)
       {
          /* Auto-provision worktree entries for all configured workspaces */
@@ -792,23 +828,26 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
             }
          }
 
-         /* Block the write regardless of whether worktree creation succeeded.
-          * Writing to the real repo is never acceptable when a workspace is configured. */
+         /* Block and redirect only when a valid worktree was created or exists.
+          * If worktree creation failed (e.g., stale session, missing directory),
+          * allow the operation with a warning — blocking to a nonexistent path
+          * is worse than allowing the write to proceed. */
          if (wt_path)
          {
             snprintf(msg_buf, msg_len,
-                     "BLOCKED: write to real workspace path (worktree auto-provisioned). "
+                     "BLOCKED: write to real workspace path. "
                      "Use worktree instead: %s",
                      wt_path);
+            cJSON_Delete(root);
+            return 2;
          }
          else
          {
-            snprintf(msg_buf, msg_len,
-                     "BLOCKED: write to real workspace path. "
-                     "Worktree auto-provision failed — run `aimee` to start a session first.");
+            fprintf(stderr,
+                    "aimee: warning: worktree creation failed for workspace '%s'; "
+                    "allowing write to proceed\n",
+                    acfg.workspaces[matched_ws]);
          }
-         cJSON_Delete(root);
-         return 2;
       }
    }
 
@@ -1644,9 +1683,29 @@ const char *worktree_for_path(session_state_t *state, const config_t *cfg, const
    }
    if (best >= 0)
    {
+      /* If the path is already inside a .claude/worktrees/ subdirectory of the
+       * matched workspace, the agent is working in a Claude Code worktree and
+       * should not be redirected to an aimee-managed worktree. */
+      const char *remainder = norm_path + best_len;
+      if (remainder[0] == '/')
+         remainder++;
+      if (strncmp(remainder, ".claude/worktrees/", 18) == 0)
+         return NULL;
+
       const char *slash = strrchr(cfg->workspaces[best], '/');
       const char *ws_name = slash ? slash + 1 : cfg->workspaces[best];
-      return worktree_resolve_path(state, ws_name);
+      const char *resolved = worktree_resolve_path(state, ws_name);
+      /* Verify the resolved path actually exists on disk. worktree_ensure may
+       * report success for a stale entry or the path may have been removed
+       * between sessions. Redirecting to a nonexistent path is worse than
+       * allowing the operation. */
+      if (resolved)
+      {
+         struct stat st;
+         if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
+            return NULL;
+      }
+      return resolved;
    }
    return NULL;
 }
@@ -1680,6 +1739,15 @@ const char *worktree_for_path_if_created(session_state_t *state, const config_t 
    }
    if (best >= 0)
    {
+      /* If the path is already inside a .claude/worktrees/ subdirectory of the
+       * matched workspace, the agent is working in a Claude Code worktree and
+       * should not be redirected to an aimee-managed worktree. */
+      const char *remainder = norm_path + best_len;
+      if (remainder[0] == '/')
+         remainder++;
+      if (strncmp(remainder, ".claude/worktrees/", 18) == 0)
+         return NULL;
+
       const char *slash = strrchr(cfg->workspaces[best], '/');
       const char *ws_name = slash ? slash + 1 : cfg->workspaces[best];
       for (int j = 0; j < state->worktree_count; j++)
