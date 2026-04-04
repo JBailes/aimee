@@ -1498,12 +1498,28 @@ int worktree_ensure(worktree_entry_t *entry)
    if (entry->created == -1)
       return -1; /* already failed, don't retry */
 
-   /* Check if worktree directory already exists (e.g., created by another process) */
+   /* Check if worktree directory already exists AND is a valid git worktree.
+    * A valid git worktree has a .git file (not directory) that points back to
+    * the main repo's .git/worktrees/ entry. A plain directory without .git is
+    * NOT a valid worktree — it may have been left behind by a failed creation
+    * or created by an unrelated process. */
    struct stat st;
    if (stat(entry->path, &st) == 0 && S_ISDIR(st.st_mode))
    {
-      entry->created = 1;
-      return 0;
+      char git_file[MAX_PATH_LEN];
+      snprintf(git_file, sizeof(git_file), "%s/.git", entry->path);
+      struct stat git_st;
+      if (stat(git_file, &git_st) == 0)
+      {
+         entry->created = 1;
+         return 0;
+      }
+      /* Directory exists but is not a git worktree — remove it so git worktree
+       * add can succeed (it refuses to create into a non-empty directory). */
+      fprintf(stderr,
+              "aimee: worktree dir '%s' exists but is not a git worktree — removing stale dir\n",
+              entry->path);
+      rmdir(entry->path);
    }
 
    /* Need workspace_root to create */
