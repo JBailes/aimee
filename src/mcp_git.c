@@ -1,7 +1,6 @@
 /* mcp_git.c: MCP git tool handlers -- compact git operations for primary agents */
 #include "aimee.h"
 #include "cJSON.h"
-#include "headers/git_verify.h"
 #include "headers/guardrails.h"
 #include "headers/util.h"
 #include <dirent.h>
@@ -141,24 +140,6 @@ static int branch_own_check(const char *branch, char *owner_out, size_t owner_le
    }
    /* No owner recorded or owned by current session = allowed */
    return 1;
-}
-
-/* Get current branch name into buf. Returns 0 on success. */
-static int get_current_branch(char *buf, size_t len)
-{
-   int rc;
-   char *out = run_cmd("git rev-parse --abbrev-ref HEAD 2>/dev/null", &rc);
-   if (rc != 0 || !out)
-   {
-      free(out);
-      return -1;
-   }
-   char *nl = strchr(out, '\n');
-   if (nl)
-      *nl = '\0';
-   snprintf(buf, len, "%s", out);
-   free(out);
-   return 0;
 }
 
 /* --- git_status --- */
@@ -310,24 +291,6 @@ cJSON *handle_git_commit(cJSON *args)
    cJSON *jmsg = cJSON_GetObjectItemCaseSensitive(args, "message");
    if (!cJSON_IsString(jmsg) || !jmsg->valuestring[0])
       return mcp_text("error: 'message' parameter is required");
-
-   /* Branch ownership check */
-   {
-      char br[256];
-      if (get_current_branch(br, sizeof(br)) == 0)
-      {
-         char owner[64];
-         if (!branch_own_check(br, owner, sizeof(owner)))
-         {
-            char err[512];
-            snprintf(err, sizeof(err),
-                     "commit blocked: branch '%s' is owned by session %.20s. "
-                     "Use git_branch action=claim to take ownership.",
-                     br, owner);
-            return mcp_text(err);
-         }
-      }
-   }
 
    cJSON *jfiles = cJSON_GetObjectItemCaseSensitive(args, "files");
 
@@ -494,60 +457,6 @@ cJSON *handle_git_push(cJSON *args)
    char branch[256];
    snprintf(branch, sizeof(branch), "%s", branch_out);
    free(branch_out);
-
-   /* Branch ownership check */
-   {
-      char owner[64];
-      if (!branch_own_check(branch, owner, sizeof(owner)))
-      {
-         char err[512];
-         snprintf(err, sizeof(err),
-                  "push blocked: branch '%s' is owned by session %.20s. "
-                  "Use git_branch action=claim to take ownership.",
-                  branch, owner);
-         return mcp_text(err);
-      }
-   }
-
-   /* Block push to branches with merged PRs */
-   if (strcmp(branch, "main") != 0 && strcmp(branch, "master") != 0)
-   {
-      char pr_cmd[512];
-      snprintf(
-          pr_cmd, sizeof(pr_cmd),
-          "gh pr list --head '%s' --state merged --json number --template '{{len .}}' 2>/dev/null",
-          branch);
-      char *pr_out = run_cmd(pr_cmd, &rc);
-      if (pr_out && rc == 0 && pr_out[0] != '0' && pr_out[0] != '\0')
-      {
-         char err[512];
-         snprintf(err, sizeof(err),
-                  "push blocked: branch '%s' has a merged PR. "
-                  "Create a new branch for new work.",
-                  branch);
-         free(pr_out);
-         return mcp_text(err);
-      }
-      free(pr_out);
-   }
-
-   /* Check verify gate */
-   cJSON *jskip = cJSON_GetObjectItemCaseSensitive(args, "skip_verify");
-   int skip_verify = (jskip && cJSON_IsTrue(jskip)) ? 1 : 0;
-
-   if (!skip_verify)
-   {
-      char verify_msg[512];
-      if (!verify_check_head(NULL, verify_msg, sizeof(verify_msg)))
-      {
-         char err[1024];
-         snprintf(err, sizeof(err),
-                  "push blocked: verification required.\n%s\n"
-                  "Run 'aimee git verify' first, or push with skip_verify: true.",
-                  verify_msg);
-         return mcp_text(err);
-      }
-   }
 
    /* Check if upstream exists and whether it matches the local branch name */
    char *upstream = run_cmd("git rev-parse --abbrev-ref @{upstream} 2>&1", &rc);
@@ -1131,40 +1040,6 @@ cJSON *handle_git_pr(cJSON *args)
 
    if (strcmp(action, "create") == 0)
    {
-      /* Branch ownership check */
-      {
-         char br[256];
-         if (get_current_branch(br, sizeof(br)) == 0)
-         {
-            char owner[64];
-            if (!branch_own_check(br, owner, sizeof(owner)))
-            {
-               char err[512];
-               snprintf(err, sizeof(err),
-                        "pr create blocked: branch '%s' is owned by session %.20s. "
-                        "Use git_branch action=claim to take ownership.",
-                        br, owner);
-               return mcp_text(err);
-            }
-         }
-      }
-
-      /* Verify gate for PR creation */
-      cJSON *jskip = cJSON_GetObjectItemCaseSensitive(args, "skip_verify");
-      if (!(jskip && cJSON_IsTrue(jskip)))
-      {
-         char verify_msg[512];
-         if (!verify_check_head(NULL, verify_msg, sizeof(verify_msg)))
-         {
-            char err[1024];
-            snprintf(err, sizeof(err),
-                     "pr create blocked: verification required.\n%s\n"
-                     "Run 'aimee git verify' first, or pass skip_verify: true.",
-                     verify_msg);
-            return mcp_text(err);
-         }
-      }
-
       cJSON *jtitle = cJSON_GetObjectItemCaseSensitive(args, "title");
       cJSON *jbody = cJSON_GetObjectItemCaseSensitive(args, "body");
       cJSON *jbase = cJSON_GetObjectItemCaseSensitive(args, "base");

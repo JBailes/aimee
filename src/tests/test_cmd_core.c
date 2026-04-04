@@ -146,7 +146,6 @@ static void test_handle_git_pr_create_missing_title(void)
 {
    cJSON *args = cJSON_CreateObject();
    cJSON_AddStringToObject(args, "action", "create");
-   cJSON_AddBoolToObject(args, "skip_verify", 1);
    cJSON *resp = handle_git_pr(args);
    char *text = get_mcp_text(resp);
    assert(text != NULL);

@@ -331,17 +331,11 @@ static cJSON *build_tools_list(void)
       cJSON_AddStringToObject(f, "type", "boolean");
       cJSON_AddStringToObject(f, "description",
                               "Use --force-with-lease (default false). Never uses --force.");
-      cJSON *sv = cJSON_AddObjectToObject(p, "skip_verify");
-      cJSON_AddStringToObject(sv, "type", "boolean");
-      cJSON_AddStringToObject(sv, "description",
-                              "Skip verification gate (default false). "
-                              "Only use when explicitly requested.");
-      cJSON_AddItemToArray(
-          tools, build_tool("git_push",
-                            "Push current branch to origin. Sets upstream on first push. "
-                            "Blocked if project has verify steps and HEAD is not verified. "
-                            "Use instead of 'git push' via Bash.",
-                            s));
+      cJSON_AddItemToArray(tools,
+                           build_tool("git_push",
+                                      "Push current branch to origin. Sets upstream on first "
+                                      "push. Use instead of 'git push' via Bash.",
+                                      s));
    }
 
    /* git_verify */
@@ -349,12 +343,12 @@ static cJSON *build_tools_list(void)
       cJSON *s = cJSON_CreateObject();
       cJSON_AddStringToObject(s, "type", "object");
       cJSON_AddObjectToObject(s, "properties");
-      cJSON_AddItemToArray(
-          tools, build_tool("git_verify",
-                            "Run project verification steps (build, test, lint, etc.) defined "
-                            "in .aimee/project.yaml. All steps must pass before git_push is "
-                            "allowed. Returns pass/fail per step with timing.",
-                            s));
+      cJSON_AddItemToArray(tools,
+                           build_tool("git_verify",
+                                      "Run project verification steps (build, test, lint, etc.) "
+                                      "defined in .aimee/project.yaml. Returns pass/fail per "
+                                      "step with timing.",
+                                      s));
    }
 
    /* git_branch */

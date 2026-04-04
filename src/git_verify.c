@@ -1,4 +1,4 @@
-/* git_verify.c -- pipeline verification gate
+/* git_verify.c -- project verification runner
  *
  * Users define verify steps in .aimee/project.yaml:
  *   verify:
@@ -8,7 +8,7 @@
  *       run: cd src && make unit-tests
  *
  * `aimee git verify` runs all steps. On success, HEAD hash is recorded to
- * .aimee/.last-verify. `aimee git push` checks this file before allowing push.
+ * .aimee/.last-verify for informational use.
  */
 
 #include <stdio.h>

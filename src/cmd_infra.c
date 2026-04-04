@@ -177,8 +177,6 @@ void cmd_git(app_ctx_t *ctx, int argc, char **argv)
       {
          if (strcmp(argv[i], "--force") == 0 || strcmp(argv[i], "-f") == 0)
             cJSON_AddBoolToObject(args, "force", 1);
-         if (strcmp(argv[i], "--skip-verify") == 0)
-            cJSON_AddBoolToObject(args, "skip_verify", 1);
       }
       resp = handle_git_push(args);
    }
