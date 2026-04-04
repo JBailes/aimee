@@ -562,6 +562,9 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
          }
       }
 
+      /* Compact consecutive same-role messages before sending */
+      messages_compact_consecutive(messages);
+
       /* Build request (use fb_agent which may have fallback model after turn 0) */
       cJSON *req;
       if (chatgpt)
@@ -1537,4 +1540,63 @@ static void agent_store_feedback(sqlite3 *db, const agent_result_t *result, cons
    sqlite3_bind_text(stmt, 2, content, -1, SQLITE_TRANSIENT);
    sqlite3_bind_double(stmt, 3, result->success ? 0.8 : 0.4);
    DB_STEP_LOG(stmt, "agent_store_feedback");
+}
+
+/* Merge consecutive same-role messages in a cJSON messages array.
+ * Returns the number of merges performed. Idempotent. */
+int messages_compact_consecutive(cJSON *messages)
+{
+   if (!messages || !cJSON_IsArray(messages))
+      return 0;
+
+   int merged = 0;
+   cJSON *cur = messages->child;
+
+   while (cur && cur->next)
+   {
+      cJSON *next = cur->next;
+      const char *cur_role = cJSON_GetStringValue(cJSON_GetObjectItem(cur, "role"));
+      const char *next_role = cJSON_GetStringValue(cJSON_GetObjectItem(next, "role"));
+
+      if (!cur_role || !next_role || strcmp(cur_role, next_role) != 0)
+      {
+         cur = next;
+         continue;
+      }
+
+      /* Same role — merge next's content into cur */
+      cJSON *cur_content = cJSON_GetObjectItem(cur, "content");
+      cJSON *next_content = cJSON_GetObjectItem(next, "content");
+
+      const char *cur_text = cJSON_GetStringValue(cur_content);
+      const char *next_text = cJSON_GetStringValue(next_content);
+
+      /* Only merge string content; skip messages with structured content (tool_calls, etc.) */
+      if (!cur_text || !next_text)
+      {
+         cur = next;
+         continue;
+      }
+
+      size_t new_len = strlen(cur_text) + 2 + strlen(next_text) + 1;
+      char *merged_text = malloc(new_len);
+      if (!merged_text)
+      {
+         cur = next;
+         continue;
+      }
+      snprintf(merged_text, new_len, "%s\n\n%s", cur_text, next_text);
+
+      cJSON_ReplaceItemInObject(cur, "content", cJSON_CreateString(merged_text));
+      free(merged_text);
+
+      /* Remove next from the array and free it */
+      cJSON_DetachItemViaPointer(messages, next);
+      cJSON_Delete(next);
+
+      merged++;
+      /* Don't advance cur — check if the next one also matches */
+   }
+
+   return merged;
 }
