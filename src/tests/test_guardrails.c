@@ -164,6 +164,9 @@ static void test_session_state_worktrees(void)
 
 static void test_worktree_blocks_writes(void)
 {
+   /* Create fake worktree directories so stat() checks pass */
+   system("mkdir -p /tmp/worktrees/abc/wol");
+
    sqlite3 *db = db_open(":memory:");
    session_state_t state;
    memset(&state, 0, sizeof(state));
@@ -199,10 +202,14 @@ static void test_worktree_blocks_writes(void)
 
    db_stmt_cache_clear();
    db_close(db);
+   system("rm -rf /tmp/worktrees");
 }
 
 static void test_worktree_prefers_specific_workspace(void)
 {
+   /* Create fake worktree directories so stat() checks pass */
+   system("mkdir -p /tmp/worktrees/abc/dev /tmp/worktrees/abc/aimee");
+
    sqlite3 *db = db_open(":memory:");
    session_state_t state;
    memset(&state, 0, sizeof(state));
@@ -242,6 +249,7 @@ static void test_worktree_prefers_specific_workspace(void)
 
    db_stmt_cache_clear();
    db_close(db);
+   system("rm -rf /tmp/worktrees");
 }
 
 /* --- Deeper edge case tests --- */
@@ -669,6 +677,9 @@ static void test_unknown_subagent_surface_blocked(void)
 
 static void test_worktree_blocks_cd_into_workspace(void)
 {
+   /* Create fake worktree directory so stat() checks in worktree_for_path pass */
+   system("mkdir -p /tmp/worktrees/abc/aimee");
+
    sqlite3 *db = db_open(":memory:");
    session_state_t state;
    memset(&state, 0, sizeof(state));
@@ -704,10 +715,14 @@ static void test_worktree_blocks_cd_into_workspace(void)
 
    db_stmt_cache_clear();
    db_close(db);
+   system("rm -rf /tmp/worktrees");
 }
 
 static void test_worktree_blocks_edit_to_real_workspace(void)
 {
+   /* Create fake worktree directory so stat() checks in worktree_for_path pass */
+   system("mkdir -p /tmp/worktrees/abc/aimee");
+
    sqlite3 *db = db_open(":memory:");
    session_state_t state;
    memset(&state, 0, sizeof(state));
@@ -739,6 +754,7 @@ static void test_worktree_blocks_edit_to_real_workspace(void)
 
    db_stmt_cache_clear();
    db_close(db);
+   system("rm -rf /tmp/worktrees");
 }
 
 static void test_hook_call_count_increments(void)
