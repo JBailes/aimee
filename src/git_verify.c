@@ -196,7 +196,8 @@ static void get_state_path(const char *project_root, char *buf, size_t len)
  *   <file_mtime_hash>
  */
 
-static int read_verify_state(const char *project_root, time_t *timestamp, char *hash, size_t hash_len)
+static int read_verify_state(const char *project_root, time_t *timestamp, char *hash,
+                             size_t hash_len)
 {
    char path[MAX_PATH_LEN];
    get_state_path(project_root, path, sizeof(path));
@@ -216,9 +217,11 @@ static int read_verify_state(const char *project_root, time_t *timestamp, char *
    fclose(f);
 
    /* Strip trailing whitespace */
-   for (char *p = ts_line + strlen(ts_line) - 1; p >= ts_line && (*p == '\n' || *p == '\r' || *p == ' '); p--)
+   for (char *p = ts_line + strlen(ts_line) - 1;
+        p >= ts_line && (*p == '\n' || *p == '\r' || *p == ' '); p--)
       *p = '\0';
-   for (char *p = hash_line + strlen(hash_line) - 1; p >= hash_line && (*p == '\n' || *p == '\r' || *p == ' '); p--)
+   for (char *p = hash_line + strlen(hash_line) - 1;
+        p >= hash_line && (*p == '\n' || *p == '\r' || *p == ' '); p--)
       *p = '\0';
 
    if (!ts_line[0] || !hash_line[0])

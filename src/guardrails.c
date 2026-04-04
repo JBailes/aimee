@@ -638,7 +638,7 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
          target = wnorm;
       }
 
-      /* Find git root for the target */
+      /* Find git root for the target. Skip if target is empty or not an absolute path. */
       char target_dir[MAX_PATH_LEN];
       snprintf(target_dir, sizeof(target_dir), "%s", target);
       /* If target looks like a file, use its directory */
@@ -651,7 +651,8 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
       }
 
       char git_root_buf[MAX_PATH_LEN];
-      if (git_repo_root(target_dir, git_root_buf, sizeof(git_root_buf)) == 0)
+      if (target_dir[0] == '/' &&
+          git_repo_root(target_dir, git_root_buf, sizeof(git_root_buf)) == 0)
       {
          const char *sid = session_id();
          char wt_path[MAX_PATH_LEN];
@@ -692,8 +693,8 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
             }
 
             fprintf(stderr, "aimee: worktree redirect: %s -> %s\n", target, wt_path);
-            snprintf(msg_buf, msg_len,
-                     "BLOCKED: write to real repo path. Use worktree instead: %s", wt_path);
+            snprintf(msg_buf, msg_len, "BLOCKED: write to real repo path. Use worktree instead: %s",
+                     wt_path);
             cJSON_Delete(root);
             return 2;
          }

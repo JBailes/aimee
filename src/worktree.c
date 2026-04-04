@@ -13,8 +13,7 @@
 /* Compute the expected sibling worktree path for a git repo and session.
  * For git_root="/root/dev/aimee" and session "abc123...", produces
  * "/root/dev/aimee-abc12345". */
-int worktree_sibling_path(const char *git_root, const char *sid,
-                          char *wt_buf, size_t wt_len)
+int worktree_sibling_path(const char *git_root, const char *sid, char *wt_buf, size_t wt_len)
 {
    if (!git_root || !sid || !wt_buf)
       return -1;
@@ -60,8 +59,8 @@ int worktree_create_sibling(const char *git_root, const char *sid)
       for (int b = 0; b < 3; b++)
       {
          char cmd[MAX_PATH_LEN + 128];
-         snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --verify '%s' 2>/dev/null",
-                  git_root, candidates[b]);
+         snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --verify '%s' 2>/dev/null", git_root,
+                  candidates[b]);
          int rc;
          char *out = run_cmd(cmd, &rc);
          free(out);
@@ -81,9 +80,8 @@ int worktree_create_sibling(const char *git_root, const char *sid)
 
    /* Create the worktree */
    char cmd[MAX_PATH_LEN * 2 + 256];
-   snprintf(cmd, sizeof(cmd),
-            "git -C '%s' worktree add '%s' -b '%s' '%s' 2>&1",
-            git_root, wt_path, branch_name, base_branch);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' worktree add '%s' -b '%s' '%s' 2>&1", git_root, wt_path,
+            branch_name, base_branch);
    int rc;
    char *out = run_cmd(cmd, &rc);
 
@@ -125,8 +123,8 @@ void worktree_cleanup(const char *git_root, const char *sid)
    int has_unpushed = 0;
    if (!has_changes)
    {
-      snprintf(cmd, sizeof(cmd),
-               "git -C '%s' log @{upstream}..HEAD --oneline 2>/dev/null", wt_path);
+      snprintf(cmd, sizeof(cmd), "git -C '%s' log @{upstream}..HEAD --oneline 2>/dev/null",
+               wt_path);
       char *log = run_cmd(cmd, &rc);
       has_unpushed = (log && log[0]);
       free(log);

@@ -1065,8 +1065,7 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          /* Record this project as changed for background re-indexing */
          if (changed_count < MAX_WORKTREES)
          {
-            snprintf(changed_projects[changed_count], sizeof(changed_projects[0]), "%s",
-                     proj_name);
+            snprintf(changed_projects[changed_count], sizeof(changed_projects[0]), "%s", proj_name);
             snprintf(changed_roots[changed_count], sizeof(changed_roots[0]), "%s", ws_root);
             changed_count++;
          }
@@ -1327,8 +1326,8 @@ void cmd_launch(app_ctx_t *ctx, int argc, char **argv)
                 (cwd[rlen] == '/' || cwd[rlen] == '\0'))
             {
                const char *suffix = cwd + rlen;
-               snprintf(target_dir, sizeof(target_dir), "%s%s",
-                        state.worktrees[i].worktree_path, suffix);
+               snprintf(target_dir, sizeof(target_dir), "%s%s", state.worktrees[i].worktree_path,
+                        suffix);
                state.dirty = 1;
                session_state_save(&state, state_path);
                break;
