@@ -117,9 +117,31 @@ The `guardrail_mode` config (`approve`/`prompt`/`deny`) continues to control aim
 - The config flag name should be clear about the implications. Consider naming it `autonomous` (not `skip_permissions`) to frame it as an aimee capability rather than a bypass.
 - Log a warning on session-start when autonomous mode is active.
 
+### Relationship to Permission Escalation Framework
+
+The separate `permission-escalation-framework` proposal (inspired by claw-code's `runtime/permissions.rs`) defines a hierarchical permission model: ReadOnly < Write < Execute < Dangerous. Autonomous mode should integrate with it:
+
+- `autonomous: false` + permission level `execute` → agent can read/write/execute but prompts for dangerous operations
+- `autonomous: true` → sets permission level to `dangerous` (auto-approve all), but aimee guardrails still enforce blocklists
+- The `--permission-mode` flag passed to Claude Code should map from aimee's permission level, not just be a binary on/off:
+  - `PERM_READ` → `--permission-mode read-only`
+  - `PERM_WRITE` → `--permission-mode workspace-write`
+  - `PERM_DANGEROUS` / `autonomous` → `--permission-mode danger-full-access`
+
+This gives finer control than just "autonomous on/off" — a user could allow workspace writes but prompt for bash execution.
+
+### Webchat Integration
+
+When launching agents via webchat, the permission level should be configurable per-session:
+- **Webchat UI**: Add a "Permission Level" dropdown (read-only / workspace-write / full access) in the session settings panel
+- **API**: `POST /api/sessions` accepts an optional `permission_level` field
+- **Display**: Show current permission level as a badge in the webchat header
+
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
 | Autonomous mode config + Claude Code flag | P1 | S | High — enables unattended workflows |
 | Codex/Gemini/Copilot flag mapping | P2 | S | Medium — extends to other providers |
+| Permission level mapping (from escalation framework) | P2 | S | High — granular control |
+| Webchat permission selector | P3 | S | Medium — webchat UX improvement |

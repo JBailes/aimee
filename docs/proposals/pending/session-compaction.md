@@ -90,6 +90,38 @@ Summary:
   ...
 ```
 
+### Continuation Message Template
+
+When resuming from a compacted session, inject this system message (validated by claw-code's `compact.rs`):
+
+```
+This session is being continued from a previous conversation that ran out of context.
+The summary below covers the earlier portion of the conversation.
+
+[formatted summary]
+
+Recent messages are preserved verbatim below this point.
+Continue the conversation from where it left off without asking the user to repeat
+anything. Do not re-summarize what was already done.
+```
+
+Include flags to suppress follow-up questions and note how many recent messages are preserved verbatim.
+
+### Webchat and Dashboard Integration
+
+Compaction events should be surfaced in both CLI and webchat:
+- **CLI**: Print a one-line notice: `[compacted: 42 messages → summary, 4 recent preserved]`
+- **Webchat**: Emit a `compaction` SSE event with message counts and summary; render as a collapsible system card in the chat UI
+- **Dashboard**: Show compaction count per delegate in the delegations table
+
+### Model-Aware Context Limits
+
+Use model-specific max token limits when deciding whether to compact (from claw-code's `max_tokens_for_model()`):
+- Opus models: 32,000 tokens
+- Sonnet/Haiku models: 64,000 tokens
+- OpenAI models: use model-specific limits from the API
+- Compact when estimated tokens exceed 80% of the model's limit
+
 ## Acceptance Criteria
 
 - [ ] `session_estimate_tokens()` returns a fast approximation within 2x of actual token count
@@ -99,6 +131,9 @@ Summary:
 - [ ] Delegates to codex/ollama automatically compact when context would exceed model limit
 - [ ] Session resume with `--resume` compacts oversized session files
 - [ ] Compacted summaries include: scope, tools, recent requests, pending work, key files, timeline
+- [ ] Continuation message uses the standard template (no recap, no follow-up questions)
+- [ ] **Webchat**: compaction events appear as collapsible cards in chat UI
+- [ ] **Dashboard**: compaction count visible per delegation
 
 ## Owner and Effort
 

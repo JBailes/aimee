@@ -108,6 +108,37 @@ project-root/
 - Two plugins cannot declare the same tool name (error on install of second).
 - Plugin tools are namespaced in listings: `plugin:tool_name`.
 
+### Tool Permission Levels
+
+Plugin tools must declare a required permission level (from claw-code's `ToolSpec` pattern):
+
+```json
+{
+  "name": "run_deploy",
+  "permission": "dangerous",
+  "command": "./tools/deploy.sh",
+  ...
+}
+```
+
+Valid levels: `read` (file inspection), `write` (file modification), `execute` (shell commands), `dangerous` (network, destructive ops). The session's permission policy determines whether the tool is auto-approved or prompted.
+
+### Plugin Tool Execution Protocol
+
+Plugin tools receive input via environment variables (matching claw-code's `PluginTool::execute()` pattern):
+- `AIMEE_PLUGIN_ID`: Plugin identifier
+- `AIMEE_PLUGIN_NAME`: Human-readable name
+- `AIMEE_TOOL_NAME`: Tool being invoked
+- `AIMEE_TOOL_INPUT`: JSON-encoded arguments on stdin
+
+Tools write their result to stdout (JSON). Non-zero exit = error.
+
+### Webchat Plugin Management
+
+- **Webchat UI**: Add a "Plugins" panel accessible from session settings showing installed plugins with enable/disable toggles
+- **API**: `GET /api/plugins` lists installed plugins; `POST /api/plugins/{id}/toggle` enables/disables
+- **Dashboard**: Add a "Plugins" card showing installed count, hook execution stats, and any recent hook failures
+
 ## Acceptance Criteria
 
 - [ ] `aimee plugin install ./path` installs a plugin from a local directory
@@ -118,6 +149,10 @@ project-root/
 - [ ] Plugin tools appear in `aimee mcp` tool listings and are callable by agents
 - [ ] Tool name conflicts with builtins are rejected at install time
 - [ ] Plugin lifecycle Init commands run on first use, Shutdown on session end
+- [ ] Plugin tools declare permission levels; session policy respects them
+- [ ] Plugin tools receive input via env vars and stdin JSON, output via stdout
+- [ ] **Webchat**: plugins panel shows installed plugins with toggle controls
+- [ ] **Dashboard**: plugin card shows hook execution stats
 
 ## Owner and Effort
 
