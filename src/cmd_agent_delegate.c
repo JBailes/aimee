@@ -416,8 +416,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
    char delegate_git_root[MAX_PATH_LEN] = "";
    {
       char cwd_buf[MAX_PATH_LEN];
-      if (getcwd(cwd_buf, sizeof(cwd_buf)) &&
-          !is_aimee_worktree_path(cwd_buf) &&
+      if (getcwd(cwd_buf, sizeof(cwd_buf)) && !is_aimee_worktree_path(cwd_buf) &&
           git_repo_root(cwd_buf, delegate_git_root, sizeof(delegate_git_root)) == 0)
       {
          snprintf(original_cwd, sizeof(original_cwd), "%s", cwd_buf);
@@ -454,8 +453,8 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
             if (worktree_branch && worktree_branch[0])
             {
                char cmd[MAX_PATH_LEN + 256];
-               snprintf(cmd, sizeof(cmd), "git -C '%s' checkout '%s' 2>&1",
-                        worktree_path, worktree_branch);
+               snprintf(cmd, sizeof(cmd), "git -C '%s' checkout '%s' 2>&1", worktree_path,
+                        worktree_branch);
                int git_rc;
                char *git_out = run_cmd(cmd, &git_rc);
                if (git_rc != 0)
