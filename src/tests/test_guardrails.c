@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "aimee.h"
@@ -722,6 +723,49 @@ static void test_no_worktree_allows_non_workspace_writes(void)
    db_close(db);
 }
 
+static void test_git_commands_allowed_by_default(void)
+{
+   /* Raw git/gh commands in Bash must not be blocked by default.
+    * block_raw_git defaults to 0 — regression guard against re-enabling it. */
+   char tmpdir[] = "/tmp/aimee-test-git-XXXXXX";
+   assert(mkdtemp(tmpdir) != NULL);
+   setenv("HOME", tmpdir, 1);
+   setenv("AIMEE_NO_CACHE", "1", 1);
+
+   sqlite3 *db = db_open(":memory:");
+   assert(db);
+   session_state_t state;
+   memset(&state, 0, sizeof(state));
+   char msg[512] = {0};
+
+   /* Simple git command */
+   int rc = pre_tool_check(db, "Bash", "{\"command\":\"git status\"}", &state, MODE_APPROVE, "/tmp",
+                           msg, sizeof(msg));
+   assert(rc == 0);
+   assert(msg[0] == '\0' || strstr(msg, "BLOCKED") == NULL);
+
+   /* gh CLI command */
+   msg[0] = '\0';
+   rc = pre_tool_check(db, "Bash", "{\"command\":\"gh pr list\"}", &state, MODE_APPROVE, "/tmp",
+                       msg, sizeof(msg));
+   assert(rc == 0);
+   assert(msg[0] == '\0' || strstr(msg, "BLOCKED") == NULL);
+
+   /* Compound command with git */
+   msg[0] = '\0';
+   rc = pre_tool_check(db, "Bash", "{\"command\":\"echo ok && git log --oneline -5\"}", &state,
+                       MODE_APPROVE, "/tmp", msg, sizeof(msg));
+   assert(rc == 0);
+   assert(msg[0] == '\0' || strstr(msg, "BLOCKED") == NULL);
+
+   unsetenv("AIMEE_NO_CACHE");
+   db_stmt_cache_clear();
+   db_close(db);
+   char cmd[512];
+   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
+   (void)system(cmd);
+}
+
 int main(void)
 {
    test_classify_sensitive();
@@ -753,6 +797,7 @@ int main(void)
    test_unknown_subagent_surface_blocked();
    test_hook_call_count_increments();
    test_no_worktree_allows_non_workspace_writes();
+   test_git_commands_allowed_by_default();
    printf("guardrails: all tests passed\n");
    return 0;
 }

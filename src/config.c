@@ -289,7 +289,7 @@ int config_load(config_t *cfg)
    snprintf(cfg->guardrail_mode, sizeof(cfg->guardrail_mode), "%s", MODE_APPROVE);
    snprintf(cfg->provider, sizeof(cfg->provider), "claude");
    cfg->use_builtin_cli = 0;
-   cfg->block_raw_git = 1;
+   cfg->block_raw_git = 0;
    snprintf(cfg->openai_endpoint, sizeof(cfg->openai_endpoint), "https://api.openai.com/v1");
    snprintf(cfg->openai_model, sizeof(cfg->openai_model), "gpt-4o");
    cfg->openai_key_cmd[0] = '\0';
