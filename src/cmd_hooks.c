@@ -198,12 +198,29 @@ char *build_capabilities_text(void)
                            "Common shortcuts: `aimee use <provider>`, `aimee provider [name]`, "
                            "`aimee verify on|off`.\n\n");
 
-   for (int i = 0; commands[i].name != NULL && pos < cap - 256; i++)
+   static const struct
    {
-      if (command_is_hidden_default(commands[i].name) || strcmp(commands[i].name, "version") == 0)
-         continue;
-      pos += (size_t)snprintf(buf + pos, cap - pos, "- `aimee %s` -- %s\n", commands[i].name,
-                              commands[i].help);
+      cmd_tier_t tier;
+      const char *label;
+   } tiers[] = {
+       {CMD_TIER_CORE, "Core"},
+       {CMD_TIER_ADVANCED, "Advanced"},
+       {CMD_TIER_ADMIN, "Admin"},
+   };
+
+   for (int t = 0; t < 3 && pos < cap - 256; t++)
+   {
+      pos += (size_t)snprintf(buf + pos, cap - pos, "\n## %s\n", tiers[t].label);
+      for (int i = 0; commands[i].name != NULL && pos < cap - 256; i++)
+      {
+         if (commands[i].tier != tiers[t].tier)
+            continue;
+         if (command_is_hidden_default(commands[i].name) ||
+             strcmp(commands[i].name, "version") == 0)
+            continue;
+         pos += (size_t)snprintf(buf + pos, cap - pos, "- `aimee %s` -- %s\n", commands[i].name,
+                                 commands[i].help);
+      }
    }
    pos += (size_t)snprintf(buf + pos, cap - pos, "\n");
 
@@ -367,23 +384,25 @@ static char *build_session_context(sqlite3 *db)
          {
             int has_section = 0;
 
-            /* Project-relevant memories (facts/decisions mentioning project name) */
-            char like_pattern[256];
-            snprintf(like_pattern, sizeof(like_pattern), "%%%s%%", project_name);
-
+            /* Project-relevant memories via workspace tag JOIN.
+             * Prioritizes workflow rules, then by tier and usage.
+             * Falls back to LIKE matching for untagged memories. */
             static const char *mem_sql =
-                "SELECT key, content FROM memories"
-                " WHERE tier IN ('L1', 'L2', 'L3')"
-                " AND (key LIKE ? OR content LIKE ?)"
-                " ORDER BY CASE tier WHEN 'L3' THEN 0 WHEN 'L2' THEN 1 ELSE 2 END,"
-                " use_count DESC LIMIT 3";
+                "SELECT m.key, m.content, m.kind FROM memories m"
+                " JOIN memory_workspaces mw ON mw.memory_id = m.id"
+                " WHERE mw.workspace = ?"
+                " AND m.tier IN ('L1', 'L2', 'L3')"
+                " ORDER BY"
+                "   CASE m.kind WHEN 'workflow' THEN 0 WHEN 'decision' THEN 1 ELSE 2 END,"
+                "   CASE m.tier WHEN 'L3' THEN 0 WHEN 'L2' THEN 1 ELSE 2 END,"
+                "   m.use_count DESC"
+                " LIMIT 10";
             sqlite3_stmt *mstmt = db_prepare(db, mem_sql);
             if (mstmt)
             {
-               sqlite3_bind_text(mstmt, 1, like_pattern, -1, SQLITE_TRANSIENT);
-               sqlite3_bind_text(mstmt, 2, like_pattern, -1, SQLITE_TRANSIENT);
+               sqlite3_bind_text(mstmt, 1, project_name, -1, SQLITE_TRANSIENT);
 
-               while (sqlite3_step(mstmt) == SQLITE_ROW && pos < cap - 256)
+               while (sqlite3_step(mstmt) == SQLITE_ROW && pos < cap - 512)
                {
                   if (!has_section)
                   {
@@ -393,10 +412,57 @@ static char *build_session_context(sqlite3 *db)
                   }
                   const char *val = (const char *)sqlite3_column_text(mstmt, 1);
                   const char *key = (const char *)sqlite3_column_text(mstmt, 0);
+                  const char *kind = (const char *)sqlite3_column_text(mstmt, 2);
                   const char *text = (val && val[0]) ? val : (key ? key : "");
-                  pos += (size_t)snprintf(buf + pos, cap - pos, "- %.150s\n", text);
+                  if (kind && kind[0])
+                     pos += (size_t)snprintf(buf + pos, cap - pos, "- [%s] %.300s\n", kind, text);
+                  else
+                     pos += (size_t)snprintf(buf + pos, cap - pos, "- %.300s\n", text);
                }
                sqlite3_reset(mstmt);
+            }
+
+            /* Fallback: LIKE matching for memories not yet workspace-tagged */
+            if (!has_section)
+            {
+               char like_pattern[256];
+               snprintf(like_pattern, sizeof(like_pattern), "%%%s%%", project_name);
+
+               static const char *like_sql =
+                   "SELECT m.key, m.content, m.kind FROM memories m"
+                   " WHERE m.tier IN ('L1', 'L2', 'L3')"
+                   " AND m.id NOT IN (SELECT memory_id FROM memory_workspaces)"
+                   " AND (m.key LIKE ? OR m.content LIKE ?)"
+                   " ORDER BY"
+                   "   CASE m.kind WHEN 'workflow' THEN 0 WHEN 'decision' THEN 1 ELSE 2 END,"
+                   "   CASE m.tier WHEN 'L3' THEN 0 WHEN 'L2' THEN 1 ELSE 2 END,"
+                   "   m.use_count DESC LIMIT 5";
+               sqlite3_stmt *lstmt = db_prepare(db, like_sql);
+               if (lstmt)
+               {
+                  sqlite3_bind_text(lstmt, 1, like_pattern, -1, SQLITE_TRANSIENT);
+                  sqlite3_bind_text(lstmt, 2, like_pattern, -1, SQLITE_TRANSIENT);
+
+                  while (sqlite3_step(lstmt) == SQLITE_ROW && pos < cap - 512)
+                  {
+                     if (!has_section)
+                     {
+                        pos += (size_t)snprintf(buf + pos, cap - pos, "# Project Context (%s)\n",
+                                                project_name);
+                        has_section = 1;
+                     }
+                     const char *val = (const char *)sqlite3_column_text(lstmt, 1);
+                     const char *key = (const char *)sqlite3_column_text(lstmt, 0);
+                     const char *kind = (const char *)sqlite3_column_text(lstmt, 2);
+                     const char *text = (val && val[0]) ? val : (key ? key : "");
+                     if (kind && kind[0])
+                        pos +=
+                            (size_t)snprintf(buf + pos, cap - pos, "- [%s] %.300s\n", kind, text);
+                     else
+                        pos += (size_t)snprintf(buf + pos, cap - pos, "- %.300s\n", text);
+                  }
+                  sqlite3_reset(lstmt);
+               }
             }
 
             /* Index stats for this project */
@@ -436,6 +502,44 @@ static char *build_session_context(sqlite3 *db)
             if (has_section)
                pos += (size_t)snprintf(buf + pos, cap - pos, "\n");
          }
+      }
+   }
+
+   /* Shared context: cross-cutting memories tagged with _shared workspace */
+   {
+      static const char *shared_sql =
+          "SELECT m.key, m.content, m.kind FROM memories m"
+          " JOIN memory_workspaces mw ON mw.memory_id = m.id"
+          " WHERE mw.workspace = '_shared'"
+          " AND m.tier IN ('L1', 'L2', 'L3')"
+          " ORDER BY"
+          "   CASE m.kind WHEN 'workflow' THEN 0 WHEN 'decision' THEN 1 ELSE 2 END,"
+          "   CASE m.tier WHEN 'L3' THEN 0 WHEN 'L2' THEN 1 ELSE 2 END,"
+          "   m.use_count DESC"
+          " LIMIT 5";
+      sqlite3_stmt *shstmt = db_prepare(db, shared_sql);
+      if (shstmt)
+      {
+         int has_shared = 0;
+         while (sqlite3_step(shstmt) == SQLITE_ROW && pos < cap - 512)
+         {
+            if (!has_shared)
+            {
+               pos += (size_t)snprintf(buf + pos, cap - pos, "# Shared Context\n");
+               has_shared = 1;
+            }
+            const char *val = (const char *)sqlite3_column_text(shstmt, 1);
+            const char *key = (const char *)sqlite3_column_text(shstmt, 0);
+            const char *kind = (const char *)sqlite3_column_text(shstmt, 2);
+            const char *text = (val && val[0]) ? val : (key ? key : "");
+            if (kind && kind[0])
+               pos += (size_t)snprintf(buf + pos, cap - pos, "- [%s] %.300s\n", kind, text);
+            else
+               pos += (size_t)snprintf(buf + pos, cap - pos, "- %.300s\n", text);
+         }
+         if (has_shared)
+            pos += (size_t)snprintf(buf + pos, cap - pos, "\n");
+         sqlite3_reset(shstmt);
       }
    }
 

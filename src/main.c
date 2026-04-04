@@ -22,14 +22,29 @@ static void usage(void)
                    "Common shortcuts:\n"
                    "  use <provider>      Set the default provider\n"
                    "  provider [name]     Show or set the default provider\n"
-                   "  verify on|off       Enable or disable cross-verification\n"
-                   "\n"
-                   "Commands:\n");
-   for (int i = 0; commands[i].name != NULL; i++)
+                   "  verify on|off       Enable or disable cross-verification\n");
+
+   static const struct
    {
-      if (command_is_hidden_default(commands[i].name))
-         continue;
-      fprintf(stderr, "  %-16s %s\n", commands[i].name, commands[i].help);
+      cmd_tier_t tier;
+      const char *label;
+   } tiers[] = {
+       {CMD_TIER_CORE, "Core commands"},
+       {CMD_TIER_ADVANCED, "Advanced commands"},
+       {CMD_TIER_ADMIN, "Admin commands"},
+   };
+
+   for (int t = 0; t < 3; t++)
+   {
+      fprintf(stderr, "\n%s:\n", tiers[t].label);
+      for (int i = 0; commands[i].name != NULL; i++)
+      {
+         if (commands[i].tier != tiers[t].tier)
+            continue;
+         if (command_is_hidden_default(commands[i].name))
+            continue;
+         fprintf(stderr, "  %-16s %s\n", commands[i].name, commands[i].help);
+      }
    }
    exit(1);
 }
