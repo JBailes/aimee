@@ -1,84 +1,86 @@
-# Proposal: Hash-Anchored Edit Validation
+# Proposal: File Operation Safety Guards
 
 ## Problem
 
-When multiple agents or delegates work on files, edits can target stale content. Agent A reads a file, Agent B edits it, then Agent A edits based on its outdated read. The Edit tool may succeed (if the old_string still matches) but produce incorrect results, or fail with confusing errors. There is no mechanism to detect that the file changed between read and edit.
+Two pending proposals cover closely related file-safety failures:
 
-Evidence: oh-my-openagent's "hashline" system (`src/tools/hashline-edit/`) tags every line with a content hash on read (`11#VK| function hello() {`). Edits reference these hashes; if the file changed, the hash won't match and the edit is rejected. They report improved edit success rates from 6.7% to 68.3%.
+- stale edits based on outdated reads
+- blind overwrites of existing files without reading first
+
+These belong together. Both protect against agents writing to files based on stale or nonexistent knowledge of current file state.
 
 ## Goals
 
-- Detect when a file has changed between Read and Edit
-- Reject edits targeting stale content with a clear error
-- Per-line granularity: only reject if the edited lines actually changed
-- Transparent to agents — hashes are embedded in Read output
+- Block overwriting existing files that have not been read in the current session.
+- Detect when a file changed between read and edit.
+- Give agents clear recovery guidance instead of ambiguous failures.
+- Keep protections scoped per session so legitimate workflows still work.
 
 ## Approach
 
-When the MCP Read tool returns file content, compute a per-line content hash and store it server-side keyed by (session, file, line_number). When the MCP Edit tool receives an edit, verify that the hash for each affected line still matches the current file content. If not, reject with "file changed since last read — re-read before editing."
+Build one file-operation safety layer with two checks:
 
-### Hash computation
+1. read-before-write guard for existing files
+2. hash-anchored stale-edit validation for edited regions
 
-```c
-// xxHash32 of trimmed line content, mapped to 2-char dictionary tag
-uint32_t hash = xxhash32(trimmed_line, len, 0);
-const char *tag = HASH_DICT[hash % 256];
-// Output: "11#VK| function hello() {"
-```
+### Read-Before-Write
+
+Track files read in the current session. If `Write` targets an existing unread file, block it with guidance to use `Read`/`Edit` first.
+
+### Hash-Anchored Edit Validation
+
+On `Read`, compute per-line hashes and cache them per session. On `Edit`, verify the targeted lines still match the last-read hashes; if not, reject with a stale-read error.
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/mcp_tools.c` | Add hash computation on Read, hash validation on Edit |
-| `src/server_session.c` | Add per-session file hash cache |
-| `src/headers/mcp_tools.h` | Hash dictionary, hash cache structures |
+| `src/mcp_tools.c` | Read tracking, per-line hashing, and stale-edit validation |
+| `src/server_session.c` | Per-session read-set and line-hash cache |
+| `src/headers/mcp_tools.h` | Hash/cache structures and helpers |
 
 ## Acceptance Criteria
 
-- [ ] Read output includes per-line hash tags
-- [ ] Edit to unmodified file succeeds normally
-- [ ] Edit to file modified since last Read is rejected with clear error
-- [ ] Hash cache is scoped per session and cleaned up on session end
-- [ ] Performance: hash computation adds <1ms for files under 10K lines
+- [ ] Writing an existing unread file is blocked with guidance.
+- [ ] Writing a new file still succeeds normally.
+- [ ] Editing unchanged lines after a read succeeds normally.
+- [ ] Editing lines that changed since the last read fails with a clear stale-read message.
+- [ ] Session cleanup frees read-tracking and hash state.
 
 ## Owner and Effort
 
 - **Owner:** aimee
-- **Effort:** M (2–3 days)
+- **Effort:** M
 - **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** Compile-time inclusion; opt-in via config flag initially
-- **Rollback:** Disable flag; Read/Edit revert to non-hashed behavior
-- **Blast radius:** Affects Read output format (agents see hash tags) and Edit validation
+- **Rollout:** Enable read-before-write guard first, then add hash-anchored edit validation behind a config flag if needed.
+- **Rollback:** Disable stale-edit validation and fall back to read-before-write only.
+- **Blast radius:** File-editing tools only.
 
 ## Test Plan
 
-- [ ] Unit test: hash computation is deterministic and whitespace-normalized
-- [ ] Unit test: unmodified file passes validation
-- [ ] Unit test: modified line fails validation
-- [ ] Unit test: modification to unrelated lines passes validation for edited lines
-- [ ] Integration test: concurrent edit scenario with two sessions
-- [ ] Performance test: hash 10K-line file in <1ms
+- [ ] Unit tests: write-before-read blocking and allow cases
+- [ ] Unit tests: deterministic line hashing and stale-edit detection
+- [ ] Integration tests: concurrent edit scenarios across sessions
 
 ## Operational Impact
 
-- **Metrics:** Hash validation pass/fail counts per session
-- **Logging:** Log validation failures at info level
-- **Disk/CPU/Memory:** ~16 bytes per line per session in hash cache; negligible CPU for xxHash32
+- **Metrics:** `blocked_blind_writes_total`, `stale_edit_rejections_total`
+- **Logging:** WARN on blocked writes and stale-edit failures
+- **Alerts:** None
+- **Disk/CPU/Memory:** Small per-session caches
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Hash-Anchored Edits | P1 | M | High — eliminates stale-edit class of bugs |
+| Read-before-write guard | P1 | S | High |
+| Hash-anchored stale-edit validation | P1 | M | High |
 
 ## Trade-offs
 
-Alternative: file-level checksums (hash entire file, not per-line). Simpler but too coarse — any change anywhere in the file would reject all edits, even to unrelated sections. Per-line hashing allows concurrent edits to different regions.
-
-Alternative: optimistic locking via mtime. Race-prone and doesn't catch in-process rewrites from the same session.
-
-Inspiration: oh-my-openagent `src/tools/hashline-edit/`
+- **Why merge these proposals?** They both enforce the same invariant: file modifications must be based on current observed file state.
+- **Why not rely on mtimes or full-file hashes?** They are too coarse and reject safe concurrent edits in unrelated regions.
+- **Why keep read-before-write even with line hashes?** Hash validation only helps when a read already happened; blind overwrites still need a hard guard.

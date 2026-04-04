@@ -1,202 +1,179 @@
-# Proposal: Structured Multi-Perspective Code Review
+# Proposal: Verification, Review, and Completion Pipeline
 
 ## Problem
 
-Aimee's `verify` command runs delegate-based review on current changes, but the review is single-perspective and unstructured. The delegate gets a diff and returns freeform text. There is no:
-- Categorical analysis (security, performance, quality, maintainability)
-- Severity classification (critical vs. low)
-- Parallel multi-perspective review (security reviewer + code reviewer + architect)
-- Structured output format that can be programmatically processed
+The pending set currently splits acceptance into separate proposals:
 
-This means review quality depends entirely on the delegate's prompt interpretation, and the primary agent has no structured data to act on — just prose to parse.
+- delegates claim completion too early
+- plan steps are marked done without evidence
+- review is unstructured
+- parallel review is treated as a separate subsystem
+- retry-until-done logic is separated from verification
 
-oh-my-codex implements multi-stage categorical review: a five-domain analysis (security, quality, performance, best practices, maintainability) with severity stratification and parallel multi-reviewer passes. Their security-review skill adds OWASP-structured vulnerability scanning. The result is structured, actionable, and composable.
+In practice these are one workflow. Work should not be considered done until it has:
 
-Evidence:
-- `git_verify.c` runs build/test/lint steps but has no code review logic
-- `aimee verify` delegates to a reviewer but the prompt is generic
-- No structured review output format exists
-- Security review is not a separate concern — it's mixed into general review
+1. a completion claim
+2. evidence
+3. review
+4. an accept/reject decision
+5. optional retry with failure context
+
+Keeping these as separate proposals duplicates schema and leaves the final acceptance boundary ambiguous.
 
 ## Goals
 
-- Code review produces structured findings with severity, category, file:line, and suggested fix
-- Multiple review perspectives run in parallel (security, quality, architecture)
-- Findings are stored in the DB, not just printed — enabling tracking and regression detection
-- Critical findings block the verify gate; low findings are advisory
-- The review framework is extensible — new perspectives can be added without code changes
+- Delegate completion claims trigger verification instead of being trusted blindly.
+- Plan steps collect evidence and run success predicates where available.
+- Review findings are structured, categorized, and stored.
+- Multi-perspective review is part of the same verification pipeline.
+- Blocking failures can feed a completion loop rather than forcing manual orchestration.
 
 ## Approach
 
-### 1. Review findings model
+Implement one verification pipeline with four layers:
+
+1. completion-claim verification prompting/gating
+2. evidence collection and predicate execution
+3. structured multi-perspective review
+4. optional persistent completion loop
+
+### Evidence and Findings Model
+
+```sql
+CREATE TABLE IF NOT EXISTS step_evidence (
+    id INTEGER PRIMARY KEY,
+    step_id INTEGER NOT NULL REFERENCES plan_steps(id),
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    passed INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+```
 
 ```sql
 CREATE TABLE IF NOT EXISTS review_findings (
     id INTEGER PRIMARY KEY,
     session_id TEXT NOT NULL,
     plan_id INTEGER,
-    category TEXT NOT NULL,  -- security, quality, performance, maintainability, best_practice
-    severity TEXT NOT NULL,  -- critical, high, medium, low
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL,
     file_path TEXT,
     line_number INTEGER,
     description TEXT NOT NULL,
     suggestion TEXT,
-    reviewer TEXT,  -- delegate name that produced this finding
-    status TEXT DEFAULT 'open',  -- open, fixed, dismissed
+    reviewer TEXT,
+    status TEXT DEFAULT 'open',
     created_at TEXT DEFAULT (datetime('now'))
 );
 ```
 
-### 2. Review perspectives
+### Completion Claim Verification
 
-Define review perspectives as JSON configurations, not hardcoded:
+When a delegate reports completion, inject a concise verification protocol into the orchestrator:
 
-```json
-[
-  {
-    "name": "security",
-    "role": "review",
-    "prompt_template": "Review this diff for security vulnerabilities. Check: injection (SQL, command, XSS), authentication/authorization issues, credential exposure, insecure cryptography, SSRF. For each finding, provide: category=security, severity, file:line, description, suggestion.",
-    "blocking_severities": ["critical", "high"]
-  },
-  {
-    "name": "quality",
-    "role": "review",
-    "prompt_template": "Review this diff for code quality. Check: duplication, dead code, unnecessary abstraction, unclear naming, missing error handling at system boundaries. For each finding, provide: category=quality, severity, file:line, description, suggestion.",
-    "blocking_severities": ["critical"]
-  },
-  {
-    "name": "architecture",
-    "role": "reason",
-    "prompt_template": "Review this diff for architectural soundness. Check: boundary violations, coupling, layering, API contract changes, backwards compatibility. For each finding, provide: category=maintainability, severity, file:line, description, suggestion.",
-    "blocking_severities": ["critical"]
-  }
-]
-```
+- read changed files before trusting the summary
+- run automated verification
+- check scope against the original task
+- refuse to mark work done without evidence
 
-Store perspectives in `~/.config/aimee/review_perspectives.json`. Ship a default set; users can customize.
+### Predicate Execution
 
-### 3. Parallel multi-perspective review
+When a plan step is marked done, run its `success_predicate` if present and record the output as evidence. Predicate failure reverts the step to a failed or contested state.
 
-Extend `aimee verify` to run all configured perspectives in parallel:
+### Structured Review
 
-```c
-int verify_structured_review(app_ctx_t *ctx, const char *diff, int plan_id);
-```
+Run configurable review perspectives in parallel, such as:
 
-1. Load all perspectives from config
-2. For each perspective, delegate the review with the diff and the perspective's prompt template
-3. Parse structured findings from each delegate response (JSON array)
-4. Insert findings into `review_findings`
-5. Check if any blocking findings exist
-6. Return pass/fail with summary
+- security
+- quality
+- architecture
 
-### 4. Structured output parsing
+Each perspective produces structured findings with category, severity, file:line, description, and suggestion.
 
-Delegate prompts request JSON output:
+### Completion Loop
 
-```json
-[
-  {
-    "category": "security",
-    "severity": "high",
-    "file": "src/server.c",
-    "line": 42,
-    "description": "Command string built from user input without sanitization",
-    "suggestion": "Use parameterized execution or validate/escape the input"
-  }
-]
-```
+For plans running in completion mode:
 
-If the delegate returns non-JSON (graceful degradation), wrap the text as a single finding with severity=medium and category matching the perspective name.
+1. delegate a pending or failed step
+2. collect evidence and run predicates
+3. run structured review if configured
+4. if blocking failures remain, retry with recorded failure context
+5. stop after repeated identical failures or max iterations
 
-### 5. CLI integration
+### CLI and MCP
 
 ```bash
-aimee verify                     # existing: build+test+lint + NEW structured review
-aimee verify --review-only       # skip build/test, run only structured review
-aimee verify findings            # list open findings for current session
-aimee verify findings --severity critical,high  # filter
-aimee verify dismiss <id>        # mark a finding as dismissed with reason
+aimee verify
+aimee verify --review-only
+aimee verify findings
+aimee plan verify <plan_id>
+aimee plan complete <plan_id>
 ```
 
-### 6. MCP tool
+MCP tools:
 
-```json
-{
-  "name": "structured_review",
-  "description": "Run multi-perspective structured code review on current changes",
-  "parameters": {
-    "diff": "string (optional, auto-detected from git if omitted)",
-    "perspectives": "array of strings (optional, defaults to all configured)"
-  }
-}
-```
+- `structured_review`
+- `verify_step`
+- `plan_complete`
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/git_verify.c` | Add `verify_structured_review()` with parallel delegate dispatch and finding parsing |
-| `src/db.c` | Add `review_findings` table migration |
-| `src/mcp_tools.c` | Add `structured_review` MCP tool |
-| `src/cmd_core.c` | Extend `verify` subcommand with `--review-only`, `findings`, `dismiss` |
-| `src/tests/test_structured_review.c` | Tests for finding parsing, severity gating, parallel dispatch |
+| `src/agent_coord.c` | Inject delegate-completion verification reminders |
+| `src/agent_plan.c` | Step verification, evidence recording, and completion-loop orchestration |
+| `src/git_verify.c` | Structured multi-perspective review |
+| `src/db.c` | Add `step_evidence`, `review_findings`, and completion-loop schema |
+| `src/mcp_tools.c` | Add `structured_review`, `verify_step`, and `plan_complete` tools |
+| `src/cmd_core.c` | Extend verify and add plan verify/complete flows |
 
 ## Acceptance Criteria
 
-- [ ] `aimee verify` runs configured review perspectives in parallel alongside build/test/lint
-- [ ] Findings are stored in `review_findings` with category, severity, file:line
-- [ ] Critical/high security findings block the verify gate
-- [ ] `aimee verify findings` lists open findings
-- [ ] Perspectives are configurable via `review_perspectives.json`
-- [ ] Non-JSON delegate responses degrade gracefully to unstructured findings
-- [ ] `structured_review` MCP tool is callable
+- [ ] Delegate completion claims trigger verification guidance before the orchestrator proceeds.
+- [ ] Plan steps with `success_predicate` automatically record evidence and revert on failure.
+- [ ] `aimee verify` runs configured review perspectives in parallel alongside build/test/lint.
+- [ ] Findings are stored with category, severity, and file references.
+- [ ] `aimee plan verify <id>` re-runs predicates and reports weak vs strong evidence.
+- [ ] `aimee plan complete <id>` retries until acceptance or configured limits are hit.
 
 ## Owner and Effort
 
 - **Owner:** aimee
-- **Effort:** M (3-4 focused sessions)
+- **Effort:** L
 - **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** New table, new config file with defaults. Existing `aimee verify` gains structured review as an additive step.
-- **Rollback:** Revert commit. Drop table. Verify reverts to unstructured behavior.
-- **Blast radius:** Low. Additive to existing verify. Worst case: verify takes slightly longer due to parallel review delegates.
+- **Rollout:** Ship in layers: completion-claim verification first, evidence capture second, structured review third, completion loop last.
+- **Rollback:** Each layer can be disabled independently; the system should degrade to simpler verification rather than fail outright.
+- **Blast radius:** Medium. This proposal changes acceptance semantics.
 
 ## Test Plan
 
-- [ ] Unit tests: finding JSON parsing — valid, malformed, empty
-- [ ] Unit tests: severity gating — critical blocks, low doesn't
-- [ ] Unit tests: graceful degradation for non-JSON responses
-- [ ] Integration tests: end-to-end diff → parallel review → findings stored → gate verdict
-- [ ] Manual verification: introduce a known vulnerability, observe it flagged as critical
+- [ ] Unit tests: delegate completion protocol injection
+- [ ] Unit tests: predicate execution and evidence storage
+- [ ] Unit tests: finding parsing and severity gating
+- [ ] Unit tests: completion-loop retry and repeated-error circuit breaker
+- [ ] Integration tests: plan step done → predicate verify → review → retry/final verdict
 
 ## Operational Impact
 
-- **Metrics:** `review_findings_total{category,severity}`, `review_perspectives_run`, `review_gate_blocks`
-- **Logging:** Per-perspective: `aimee: verify review [security]: 2 findings (1 high, 1 low)`
+- **Metrics:** `step_verifications_run`, `steps_with_weak_evidence`, `review_findings_total`, `completion_loops_started`, `completion_circuit_breaks`
+- **Logging:** Per-step verification and per-perspective review summaries
 - **Alerts:** None
-- **Disk/CPU/Memory:** N delegate calls in parallel (one per perspective). Findings ~200 bytes each.
+- **Disk/CPU/Memory:** Additional subprocesses for predicates and delegate calls for review
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Multi-perspective parallel review | P1 | M | High — core value |
-| Structured finding storage | P1 | S | High — enables tracking |
-| Severity-based gating | P1 | S | High — makes review actionable |
-| Configurable perspectives | P2 | S | Medium — extensibility |
-| CLI findings management | P2 | S | Medium — user interface |
+| Completion-claim verification | P1 | S | High |
+| Evidence capture + predicate execution | P1 | S | High |
+| Structured multi-perspective review | P1 | M | High |
+| Completion loop integration | P1 | M | High |
 
 ## Trade-offs
 
-**Why parallel instead of sequential reviews?**
-Unlike consensus planning (where critic needs architect's output), review perspectives are independent. A security reviewer doesn't need quality review results. Parallel saves latency.
-
-**Why store findings in DB instead of just printing them?**
-Stored findings enable: tracking which findings were fixed vs. dismissed, detecting regressions (same finding reappearing), and feeding findings into the completion loop for automatic fix attempts.
-
-**Why configurable perspectives instead of hardcoded?**
-Different projects have different review priorities. A C project needs memory safety review; a web app needs XSS review. Users should be able to add domain-specific perspectives.
+- **Why merge review, evidence, and completion?** Acceptance is one workflow.
+- **Why parallel review?** Security, quality, and architecture review are independent enough to parallelize.
+- **Why store evidence and findings?** They must survive retries and support auditability.

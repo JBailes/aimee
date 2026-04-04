@@ -13,6 +13,8 @@ The claw-code project implements a full terminal markdown renderer in `render.rs
 - **Streaming-safe rendering**: `MarkdownStreamState` detects safe flush boundaries (complete paragraphs, closed code blocks) so partial markdown doesn't break formatting
 - **Spinner animation**: Braille character spinner with color transitions
 
+The duplicate terminal-only proposal should be folded into this one. The CLI and webchat rendering work share parsing rules, output semantics, and acceptance criteria; keeping them separate only encourages inconsistent formatting behavior.
+
 ## Goals
 
 - **CLI**: Assistant markdown output is rendered with ANSI colors and formatting in the terminal.

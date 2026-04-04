@@ -14,6 +14,8 @@ The claw-code project implements a comprehensive slash command system with 25+ c
 
 Aimee already has a rich command system via `cmd_table.c` (50+ commands), but these are only accessible from the shell. None of them are available inside a chat session — not in the CLI, and not in the webchat.
 
+There is also a duplicate proposal for "smart slash commands". Those commands are not a separate subsystem; they are examples of high-value commands that should ride on the same slash-command registry and dispatch path.
+
 ## Goals
 
 - Users can type `/command` during a chat session (CLI or webchat) to run session-level operations.
@@ -65,11 +67,22 @@ if (input[0] == '/') {
 | `/diff` | Show `git diff` for current workspace |
 | `/quit` | Exit chat session |
 
-### 4. Bridge to Existing Commands
+### 4. Higher-Level Workflow Commands
+
+Once the registry exists, add a small set of workflow-oriented commands instead of treating them as a separate proposal:
+
+| Command | Action |
+|---------|--------|
+| `/ultraplan` | Generate a deeper structured plan before implementation |
+| `/bughunter [path]` | Run a bug-hunting workflow with structured findings |
+| `/teleport <symbol>` | Jump through aimee's code index to a definition |
+| `/debug-tool-call` | Show the last tool call, result, timing, and failure hints |
+
+### 5. Bridge to Existing Commands
 
 For operations that map to existing aimee commands (e.g., `/diff` → `aimee git diff-summary`), the slash handler calls the server RPC directly rather than reimplementing logic.
 
-### 5. Webchat Integration
+### 6. Webchat Integration
 
 In `webchat.c`, intercept messages starting with `/` in `POST /api/chat/send` (or the new `POST /api/sessions/{id}/message`). Instead of forwarding to the LLM:
 1. Parse the command name and arguments
@@ -94,6 +107,7 @@ The webchat input box should show a command autocomplete dropdown when the user 
 - [ ] `/model claude-sonnet-4-6` switches model for subsequent turns
 - [ ] `/compact` reduces message count and prints summary
 - [ ] `/export chat.md` writes conversation as markdown
+- [ ] `/ultraplan`, `/bughunter`, `/teleport`, and `/debug-tool-call` are registry-backed commands, not one-off chat hacks
 - [ ] Unknown `/foo` prints "Unknown command: foo" and continues (not sent to LLM)
 - [ ] **CLI**: Tab-completion on `/` prefix shows available commands (if line editing supports it)
 - [ ] **Webchat**: `/help` in webchat input returns command list rendered in chat

@@ -1,95 +1,101 @@
-# Proposal: Unstable Agent Babysitter
+# Proposal: Delegate Liveness Monitoring and Circuit Breakers
 
 ## Problem
 
-Delegates can enter a "thinking loop" — producing extended thinking blocks but no tool calls or text output. They appear active but make no progress. This is different from simple idleness (proposal #8) or empty responses (proposal #22): the agent is consuming tokens and context window on thinking that never materializes into action. Without detection, these sessions burn through the entire context budget.
+Several pending proposals cover the same broad delegate-failure surface:
 
-Evidence: oh-my-openagent implements an `unstable-agent-babysitter` hook (`src/hooks/unstable-agent-babysitter/`) that monitors background delegate sessions for instability signals. When it detects a delegate in a thinking loop (consecutive messages with thinking blocks but no tool calls or output), it sends a "nudge" prompt to get the delegate back on track, or escalates to the orchestrator.
+- delegates return empty output
+- delegates think without acting
+- delegates go idle with unfinished work
+- delegates loop on identical tool calls
+
+These are all liveness and stuck-agent problems. They should be one proposal with one monitoring model rather than four unrelated hooks.
 
 ## Goals
 
-- Detect delegates in thinking loops (thinking without acting)
-- Detect delegates producing consecutive empty or near-empty responses
-- Nudge stuck delegates with a corrective prompt
-- Escalate to orchestrator if nudge doesn't resolve the issue
-- Configurable detection thresholds and cooldown
+- Detect delegates that are stuck, idle, looping, or silently failed.
+- Nudge delegates when recovery is likely.
+- Escalate or abort when recovery fails.
+- Surface failures clearly to the orchestrator instead of letting them look like success.
 
 ## Approach
 
-Monitor delegate session message patterns. Track consecutive messages that have thinking content but no tool calls and no substantive text output. When the count exceeds a threshold, inject a nudge via the session API. If the delegate remains stuck after the nudge, abort and escalate.
+Build one delegate liveness monitor with four signal types:
 
-### Detection signals
+1. empty or whitespace-only final responses
+2. thinking-only or near-empty message loops
+3. idle time with incomplete work
+4. repeated identical tool-call loops
 
-| Signal | Threshold | Action |
-|--------|-----------|--------|
-| Consecutive thinking-only messages | 3 | Inject nudge prompt |
-| Nudge didn't help (still stuck) | 2 more | Abort and escalate |
-| Consecutive empty responses | 2 | Inject nudge prompt |
-| Total tool calls without progress | configurable | Inject nudge prompt |
+### Responses
 
-### Nudge prompt
+- replace empty final output with an explicit failure diagnostic
+- inject a corrective prompt when a delegate appears stuck but recoverable
+- escalate to orchestrator or abort after repeated failed recovery
 
-```
-[STUCK DETECTION — TAKE ACTION NOW]
-You appear to be thinking without acting. Stop deliberating and:
-1. Make a tool call (Read, Edit, Bash, etc.)
-2. If you're blocked, explain what's blocking you
-3. If the task is done, report your results
-Do NOT continue thinking without producing output.
-```
+### Detection Examples
+
+- 3 consecutive thinking-only messages → nudge
+- 30s idle with incomplete tasks → reminder
+- 3 identical tool calls in a row → loop warning
+- 5 identical tool calls in a row → abort
+- empty final response → convert to failure diagnostic immediately
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/agent_eval.c` | Track message patterns per delegate; detect thinking loops |
-| `src/agent_coord.c` | Inject nudge prompt or abort on detection |
-| `src/headers/agent.h` | Add babysitter config and state structs |
+| `src/agent_eval.c` | Track delegate liveness signals and thresholds |
+| `src/agent_coord.c` | Inject nudges, replace empty responses, escalate/abort |
+| `src/agent_tools.c` | Track identical tool-call signatures |
+| `src/agent_jobs.c` | Idle timers for delegates with incomplete work |
+| `src/tasks.c` | Incomplete-task checks for liveness decisions |
 
 ## Acceptance Criteria
 
-- [ ] 3 consecutive thinking-only messages triggers a nudge
-- [ ] Nudge is injected as a user message in the delegate session
-- [ ] Continued stuckness after nudge triggers abort + escalation
-- [ ] Normal delegates (thinking then acting) are not affected
-- [ ] Cooldown prevents multiple nudges in quick succession (5 min default)
-- [ ] Detection thresholds are configurable
+- [ ] Empty delegate responses are replaced with explicit failure diagnostics.
+- [ ] Thinking-only or near-empty loops trigger nudges before hard abort.
+- [ ] Idle delegates with unfinished work are reminded or escalated.
+- [ ] Repeated identical tool calls trigger a circuit breaker.
+- [ ] Healthy delegates that think briefly and then act are unaffected.
+- [ ] Thresholds and cooldowns are configurable.
 
 ## Owner and Effort
 
 - **Owner:** aimee
-- **Effort:** M (2–3 days)
-- **Dependencies:** Ability to inject messages into delegate sessions
+- **Effort:** M
+- **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** Compile-time inclusion; active for delegate sessions
-- **Rollback:** Remove monitoring; stuck delegates run until context exhaustion as before
-- **Blast radius:** Only affects delegate sessions detected as stuck
+- **Rollout:** Start with empty-response detection and loop circuit breakers, then add more subjective stuckness heuristics.
+- **Rollback:** Disable the liveness monitor and fall back to passive delegate behavior.
+- **Blast radius:** Delegate sessions only.
 
 ## Test Plan
 
-- [ ] Unit test: 3 thinking-only messages triggers nudge
-- [ ] Unit test: 2 thinking-only messages does not trigger
-- [ ] Unit test: thinking followed by tool call resets counter
-- [ ] Unit test: post-nudge stuckness triggers abort
-- [ ] Unit test: cooldown prevents rapid re-nudging
-- [ ] Integration test: delegate with stuck-loop prompt, verify nudge and recovery
+- [ ] Unit tests: empty response detection
+- [ ] Unit tests: thinking-loop and idle-time thresholds
+- [ ] Unit tests: identical-call circuit breaker behavior
+- [ ] Integration tests: delegate gets nudged, recovers, or is escalated appropriately
 
 ## Operational Impact
 
-- **Metrics:** Nudge count, abort count, recovery rate after nudge
-- **Logging:** Log nudge at warning, abort at error
-- **Disk/CPU/Memory:** One counter per delegate session; negligible
+- **Metrics:** `delegate_empty_responses`, `delegate_nudges_total`, `delegate_stall_escalations`, `delegate_circuit_breakers`
+- **Logging:** WARN on nudges and empty responses, ERROR on aborts/escalations
+- **Alerts:** None
+- **Disk/CPU/Memory:** Small per-delegate counters/timers
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Unstable Agent Babysitter | P2 | M | Medium — prevents stuck delegates from wasting context |
+| Empty-response detection | P1 | S | High |
+| Loop circuit breaker | P1 | S | High |
+| Idle/stuck delegate recovery | P1 | M | High |
 
 ## Trade-offs
 
-Alternative: hard timeout on delegate sessions instead of pattern detection. Simpler but less targeted — a delegate legitimately thinking about a complex problem would be killed. Pattern detection distinguishes between productive thinking (followed by action) and stuck thinking (repeated with no output).
-
-Inspiration: oh-my-openagent `src/hooks/unstable-agent-babysitter/`
+- **Why merge these proposals?** They all describe different symptoms of the same problem: delegates that stop making useful progress.
+- **Why nudge before aborting?** Many stalls are recoverable with one explicit correction.
+- **Why keep thresholds configurable?** Different models and roles have different normal pacing.

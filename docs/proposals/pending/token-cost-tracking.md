@@ -1,42 +1,30 @@
-# Proposal: Token Usage and Cost Tracking
+# Proposal: Token Usage, Cost, and Context Budget Tracking
 
 ## Problem
 
-Aimee's built-in chat and delegation system have no visibility into token consumption or cost. Users cannot see:
-- How many tokens a chat turn or delegation consumed
-- Cumulative token usage across a session
-- Estimated cost in USD for a session or delegation
-- Cache hit rates (important for prompt caching with Anthropic)
-- Whether a delegate is approaching context limits
+The pending set currently has four overlapping proposals for token tracking:
 
-The claw-code project implements comprehensive tracking in `runtime/usage.rs`:
-- **Per-turn and cumulative tracking**: input, output, cache_creation, cache_read tokens
-- **Model-specific pricing**: Different rates for Haiku/Sonnet/Opus with separate input/output/cache pricing
-- **Cost estimation**: `estimate_cost_usd_with_pricing()` calculates USD from token counts
-- **Session reconstruction**: Rebuilds usage from conversation history
-- **Summary display**: Formatted output with `summary_lines_for_model()`
+- raw token usage display
+- per-model cost estimation
+- cache-aware accounting
+- context-budget utilization
 
-Aimee tracks delegation metrics (turns, tool calls, latency) in `agent_coord.c` but has no token-level granularity and no cost estimation.
+These are not separate features in practice. The data pipeline is shared: parse provider usage, normalize it, persist it per turn/session, then expose it in CLI, webchat, dashboards, and delegate stats. Splitting them creates duplicated structs, inconsistent pricing rules, and competing UI surfaces.
 
 ## Goals
 
-- Token usage (input, output, cache write, cache read) is tracked per-turn and cumulatively.
-- Estimated cost in USD is calculated using model-specific pricing.
-- `/cost` or `/status` in chat displays current session token usage and cost.
-- Delegation summaries include token counts and estimated cost.
-- Dashboard shows token usage and cost per delegation and aggregate.
+- Track per-turn and cumulative usage for all supported execution surfaces.
+- Support the four useful categories: input, output, cache write, cache read.
+- Estimate USD cost from model-specific pricing tables.
+- Show context-window utilization and budget pressure.
+- Persist usage into session/delegation records for dashboards, resume, and audits.
+- Provide sensible fallback estimation when providers omit usage metadata.
 
 ## Approach
 
-### 1. Token Extraction from Provider Responses
+Introduce one shared usage subsystem that normalizes provider responses and powers all displays.
 
-Both OpenAI and Anthropic return usage in their SSE streams:
-- **OpenAI**: `usage` field in the final chunk: `{prompt_tokens, completion_tokens, total_tokens}`
-- **Anthropic**: `message_delta` event with `usage: {input_tokens, output_tokens}` and `message_start` with cache tokens
-
-Extract these from the SSE parsers in `cmd_chat.c` and `webchat.c`.
-
-### 2. Usage Accumulator
+### Usage Model
 
 ```c
 typedef struct {
@@ -50,86 +38,91 @@ typedef struct {
     token_usage_t last_turn;
     token_usage_t cumulative;
     int turn_count;
+    int64_t estimated_context_used;
+    int64_t context_window_size;
+    double estimated_cost_usd;
 } usage_tracker_t;
 ```
 
-### 3. Cost Estimation
+### Shared Pipeline
 
-Pricing table per model family:
+1. Extract usage from OpenAI/Anthropic responses and SSE end states.
+2. Normalize into the shared `token_usage_t`.
+3. Estimate missing data when the provider does not report usage.
+4. Calculate:
+   - total usage
+   - cache hit rate
+   - context utilization percentage
+   - per-model and cumulative estimated cost
+5. Surface the same data consistently in chat, webchat, delegates, dashboard, and command output.
 
-| Model | Input $/M | Output $/M | Cache Write $/M | Cache Read $/M |
-|-------|-----------|------------|-----------------|----------------|
-| claude-haiku | 0.80 | 4.00 | 1.00 | 0.08 |
-| claude-sonnet | 3.00 | 15.00 | 3.75 | 0.30 |
-| claude-opus | 15.00 | 75.00 | 18.75 | 1.50 |
-| gpt-4o | 2.50 | 10.00 | — | — |
-| gpt-4o-mini | 0.15 | 0.60 | — | — |
-| gemini-2.5-pro | 1.25 | 10.00 | — | 0.315 |
+### Display Surfaces
 
-```c
-double estimate_cost_usd(const token_usage_t *usage, const char *model);
-```
-
-### 4. Display Integration
-
-- **CLI chat**: `/cost` or `/status` shows usage summary
-- **Webchat**: Include usage in SSE events; display in chat footer
-- **Delegations**: Add `input_tokens`, `output_tokens`, `estimated_cost` to delegation results in `agent_coord.c`
-- **Dashboard**: Add cost column to delegations table and cost aggregate to metrics
+- CLI post-turn status and `/cost` or `/status`
+- webchat status bar and per-session detail
+- delegation summaries and attempt logs
+- dashboard cost/token columns and aggregates
 
 ### Changes
 
 | File | Change |
 |------|--------|
-| `src/cmd_chat.c` | Extract usage from SSE responses; accumulate in `usage_tracker_t` |
-| `src/webchat.c` | Same extraction; include in SSE events to browser |
-| `src/agent_coord.c` | Record token usage in delegation results |
-| `src/dashboard.c` | Add cost column to delegations, add aggregate cost card |
-| `src/render.c` | Add `render_usage_summary()` for formatted display |
-| `src/headers/aimee.h` | Define `token_usage_t`, `usage_tracker_t`, pricing API |
+| `src/token_tracker.c` | New shared token, utilization, cache-rate, and cost logic |
+| `src/headers/token_tracker.h` | Public tracker/pricing API |
+| `src/cmd_chat.c` | Extract usage and display session stats in CLI chat |
+| `src/webchat.c` | Extract usage and emit usage updates to the browser |
+| `src/webchat_assets.c` | Show token, context, and cost status |
+| `src/agent_coord.c` | Record usage and cost for delegates |
+| `src/dashboard.c` | Add usage/cost aggregates and per-session visibility |
+| `src/config.c` | Parse model context sizes and optional budget thresholds |
 
 ## Acceptance Criteria
 
-- [ ] After a chat turn, `/cost` shows input/output tokens and estimated USD
-- [ ] Cumulative usage across multiple turns is accurate
-- [ ] Cache tokens (Anthropic) are tracked separately
-- [ ] `aimee delegate execute "..."` output includes token count and cost
-- [ ] Dashboard delegations table shows cost per delegation
-- [ ] Unknown models fall back to a default pricing tier with a warning
+- [ ] OpenAI and Anthropic usage responses normalize into one internal format.
+- [ ] All four categories are tracked when available.
+- [ ] Cost estimation uses model-specific pricing and cache pricing where applicable.
+- [ ] CLI and webchat both show cumulative usage and context utilization.
+- [ ] Delegation stats include token usage and estimated cost.
+- [ ] Unknown or non-reporting providers fall back to explicit estimation with a flag.
+- [ ] Budget thresholds can warn or stop execution when configured.
 
 ## Owner and Effort
 
 - **Owner:** aimee maintainer
-- **Effort:** S (SSE response fields already exist; just need extraction and arithmetic)
-- **Dependencies:** Slash commands proposal (for `/cost` command; can also print on session exit)
+- **Effort:** M (2-3 days)
+- **Dependencies:** None
 
 ## Rollout and Rollback
 
-- **Rollout:** Enabled by default. Cost display is informational only.
-- **Rollback:** Remove extraction code; leave accumulator structs in place.
-- **Blast radius:** Display-only — no behavioral changes.
+- **Rollout:** Tracking is always-on; hard budget enforcement remains opt-in.
+- **Rollback:** Remove displays and tracker plumbing. No core execution behavior depends on it.
+- **Blast radius:** Mispriced models can mislead users, so displays must stay labeled as estimates.
 
 ## Test Plan
 
-- [ ] Unit tests: `estimate_cost_usd()` with known token counts and models
-- [ ] Unit tests: accumulator correctly sums across turns
-- [ ] Integration tests: mock SSE response with usage fields; verify extraction
-- [ ] Manual verification: run multi-turn chat, compare `/cost` output to provider dashboard
+- [ ] Unit tests for normalization, accumulation, cache hit rate, cost calculation, and utilization.
+- [ ] Integration tests with mocked OpenAI and Anthropic responses.
+- [ ] Integration tests for provider-missing-usage fallback.
+- [ ] Manual verification against provider dashboards for a sample session.
 
 ## Operational Impact
 
-- **Metrics:** `session.total_tokens`, `session.estimated_cost_usd` (useful for monitoring spend)
-- **Logging:** INFO: cost summary at session end
-- **Alerts:** Optional: warn when session cost exceeds configurable threshold
-- **Disk/CPU/Memory:** Negligible — two structs of integers per session
+- **Metrics:** `session_tokens_total`, `session_estimated_cost_usd`, `token_estimation_fallback_total`
+- **Logging:** DEBUG per request, INFO summaries at session/delegate end
+- **Alerts:** Optional warning on budget threshold crossings
+- **Disk/CPU/Memory:** Negligible
 
 ## Priority
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Token tracking | P1 | S | High — cost visibility is essential for budget-conscious users |
+| Shared usage normalization | P1 | S | High |
+| CLI/webchat visibility | P1 | S | High |
+| Delegate/dashboard persistence | P2 | S | High |
+| Budget enforcement | P3 | S | Medium |
 
 ## Trade-offs
 
-- **Live pricing API** vs **embedded table**: A live API would always be current but adds a network dependency and failure mode. Embedded pricing is stale but reliable. Recommend embedded with periodic manual updates.
-- **Per-delegation cost** vs **per-session only**: Per-delegation is more useful (compare cost across roles/providers) but requires changes to delegation recording. Worth the extra effort.
+- **Why merge all token proposals?** Separate proposals would duplicate the same plumbing and drift on definitions.
+- **Why include context utilization here?** Budget pressure is part of usage observability, not a separate subsystem.
+- **Why keep estimation fallback?** Approximate visibility is more useful than silence for non-reporting providers.

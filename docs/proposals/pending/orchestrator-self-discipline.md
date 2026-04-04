@@ -1,21 +1,34 @@
-# Proposal: Orchestrator Self-Discipline
+# Proposal: Orchestrator Self-Discipline and Anti-Duplication Guardrails
 
 ## Problem
 
-The orchestrator session sometimes edits code files directly instead of delegating to a sub-agent. This wastes expensive orchestrator tokens (running on a top-tier model) on implementation work that a cheaper delegate model could handle. It also bypasses the delegation pipeline's guardrails, verification, and concurrency management.
+The pending set has three variants of the same orchestration-quality issue:
 
-Evidence: oh-my-openagent's Atlas hook (`src/hooks/atlas/system-reminder-templates.ts`) detects when the orchestrator edits files outside of plan/config directories and injects a reminder: "You are an ORCHESTRATOR, not an IMPLEMENTER. Delegate implementation work to subagents."
+- the orchestrator edits implementation files directly
+- the orchestrator keeps working locally instead of delegating
+- the orchestrator duplicates research already assigned to delegates
+
+These are all failures of orchestrator discipline. They should share one proposal and one enforcement layer.
+
+Evidence: oh-my-openagent's Atlas-style reminders and anti-duplication prompt sections both solve the same waste pattern: expensive orchestrators should coordinate, not re-implement or re-research delegated work.
 
 ## Goals
 
-- Detect when the orchestrator session directly edits non-config source files
-- Inject a reminder to delegate instead
-- Allow edits to plan files, config files, and `.aimee/` directory
-- Advisory only — don't block the edit
+- Detect when the orchestrator behaves like an implementer instead of a coordinator.
+- Warn on direct edits to non-planning source files.
+- Warn when too many direct tool calls happen without delegation.
+- Warn when new searches overlap with active delegate work.
+- Keep all checks advisory, not blocking.
 
 ## Approach
 
-In the MCP tool layer, after an Edit/Write call from an orchestrator session, check if the target file is outside the allowed set (plans, configs, `.aimee/`). If so, append a delegation reminder to the tool output.
+Add one orchestrator-discipline guardrail with three signals:
+
+1. direct edits to implementation files
+2. excessive direct tool use without any delegation
+3. search/read operations that overlap with pending delegate topics
+
+When any signal fires, append a reminder that the orchestrator should delegate or wait for in-flight delegate work instead of duplicating it.
 
 ### Allowed paths (no reminder)
 
@@ -28,14 +41,18 @@ In the MCP tool layer, after an Edit/Write call from an orchestrator session, ch
 
 | File | Change |
 |------|--------|
-| `src/guardrails.c` | Add `guardrails_check_orchestrator_edit()` for non-config file edits |
-| `src/mcp_tools.c` | Call guardrail check after Edit/Write in orchestrator sessions |
+| `src/guardrails.c` | Add orchestrator discipline checks for edits, duplicate searches, and non-delegating behavior |
+| `src/mcp_tools.c` | Call edit/search discipline checks in orchestrator sessions |
+| `src/agent_eval.c` | Track direct tool-call count and inject one-time delegation nudges |
+| `src/agent_coord.c` | Record pending delegation topics so overlap can be detected |
 
 ## Acceptance Criteria
 
 - [ ] Orchestrator editing `src/foo.c` gets a delegation reminder appended
 - [ ] Orchestrator editing `.aimee/plan-state.json` does NOT get a reminder
 - [ ] Orchestrator editing `docs/proposals/bar.md` does NOT get a reminder
+- [ ] Repeated direct tool usage without delegation triggers a one-time nudge
+- [ ] Searches that significantly overlap with pending delegate topics trigger a warning
 - [ ] Reminder is advisory (appended to output), not blocking
 - [ ] Only orchestrator sessions trigger this — delegate sessions are unaffected
 
@@ -68,10 +85,10 @@ In the MCP tool layer, after an Edit/Write call from an orchestrator session, ch
 
 | Item | Priority | Effort | Impact |
 |------|----------|--------|--------|
-| Orchestrator Self-Discipline | P1 | S | Medium — saves expensive orchestrator tokens |
+| Orchestrator discipline guardrails | P1 | M | Medium — saves expensive orchestrator tokens |
 
 ## Trade-offs
 
-Alternative: block orchestrator edits entirely. Too rigid — there are legitimate cases (small fixes during plan writing). Reminder-only preserves flexibility.
+Alternative: block orchestrator edits or duplicate searches entirely. Too rigid — there are legitimate exceptions. Reminder-only preserves flexibility while still steering behavior.
 
 Inspiration: oh-my-openagent `src/hooks/atlas/system-reminder-templates.ts` (DIRECT_WORK_REMINDER)
