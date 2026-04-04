@@ -23,7 +23,6 @@ int main(void)
       assert(strcmp(cfg.provider, "claude") == 0);
       assert(strcmp(cfg.guardrail_mode, "approve") == 0);
       assert(cfg.db_path[0] != '\0');
-      assert(cfg.block_raw_git == 0); /* raw git commands allowed by default */
    }
 
    /* --- config_save + config_load round-trip --- */

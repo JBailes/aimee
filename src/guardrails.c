@@ -397,43 +397,6 @@ int is_write_command(const char *command)
    return 0;
 }
 
-/* Check if a command is any git operation (read or write). Used to redirect
- * primary agents to aimee MCP git tools for token savings. */
-int is_git_command(const char *command)
-{
-   if (!command)
-      return 0;
-
-   /* Skip leading whitespace */
-   while (*command && isspace((unsigned char)*command))
-      command++;
-
-   /* Direct git command */
-   if (strncmp(command, "git ", 4) == 0 || strncmp(command, "git\t", 4) == 0)
-      return 1;
-
-   /* gh CLI (GitHub) -- all subcommands */
-   if (strncmp(command, "gh ", 3) == 0 || strncmp(command, "gh\t", 3) == 0)
-      return 1;
-
-   /* git/gh after compound operators */
-   static const char *seps[] = {" | ", " || ", " && ", "; ", NULL};
-   for (int s = 0; seps[s]; s++)
-   {
-      const char *pos = command;
-      while ((pos = strstr(pos, seps[s])) != NULL)
-      {
-         pos += strlen(seps[s]);
-         while (*pos == ' ' || *pos == '\t')
-            pos++;
-         if (strncmp(pos, "git ", 4) == 0 || strncmp(pos, "gh ", 3) == 0)
-            return 1;
-      }
-   }
-
-   return 0;
-}
-
 static int is_edit_tool(const char *tool)
 {
    return strcmp(tool, "Edit") == 0 || strcmp(tool, "Write") == 0 || strcmp(tool, "MultiEdit") == 0;
@@ -710,26 +673,6 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
          snprintf(msg_buf, msg_len,
                   "BLOCKED: branch has a merged PR. Do not push to merged branches. "
                   "Create a new branch for new work.");
-         cJSON_Delete(root);
-         return 2;
-      }
-   }
-
-   /* Git command interception: block raw git/gh commands from Bash and redirect
-    * to aimee MCP git tools for token savings. Gated on config.block_raw_git. */
-   if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) && is_git_command(cmd->valuestring))
-   {
-      config_t git_cfg;
-      config_load(&git_cfg);
-      if (git_cfg.block_raw_git)
-      {
-         snprintf(msg_buf, msg_len,
-                  "BLOCKED: use aimee MCP git tools instead of raw git/gh commands. "
-                  "Available: git_status, git_commit, git_push, git_pull, git_fetch, "
-                  "git_clone, git_branch, git_log, git_diff_summary, git_stash, "
-                  "git_tag, git_reset, git_restore, git_verify, git_pr "
-                  "(via mcp__aimee__ prefix). "
-                  "git_pr handles all gh pr/issue operations.");
          cJSON_Delete(root);
          return 2;
       }

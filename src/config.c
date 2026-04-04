@@ -171,14 +171,19 @@ int g_config_strict;
 
 /* --- Config schema --- */
 
-static const config_schema_entry_t config_schema[] = {
-    {"db_path", SCHEMA_STRING, 0},         {"guardrail_mode", SCHEMA_STRING, 0},
-    {"provider", SCHEMA_STRING, 0},        {"use_builtin_cli", SCHEMA_BOOL, 0},
-    {"openai_endpoint", SCHEMA_STRING, 0}, {"openai_model", SCHEMA_STRING, 0},
-    {"openai_key_cmd", SCHEMA_STRING, 0},  {"embedding_command", SCHEMA_STRING, 0},
-    {"workspace_root", SCHEMA_STRING, 0},  {"workspaces", SCHEMA_ARRAY, 0},
-    {"block_raw_git", SCHEMA_BOOL, 0},     {"autonomous", SCHEMA_BOOL, 0},
-    {"cross_verify", SCHEMA_OBJECT, 0},    {NULL, 0, 0}};
+static const config_schema_entry_t config_schema[] = {{"db_path", SCHEMA_STRING, 0},
+                                                      {"guardrail_mode", SCHEMA_STRING, 0},
+                                                      {"provider", SCHEMA_STRING, 0},
+                                                      {"use_builtin_cli", SCHEMA_BOOL, 0},
+                                                      {"openai_endpoint", SCHEMA_STRING, 0},
+                                                      {"openai_model", SCHEMA_STRING, 0},
+                                                      {"openai_key_cmd", SCHEMA_STRING, 0},
+                                                      {"embedding_command", SCHEMA_STRING, 0},
+                                                      {"workspace_root", SCHEMA_STRING, 0},
+                                                      {"workspaces", SCHEMA_ARRAY, 0},
+                                                      {"autonomous", SCHEMA_BOOL, 0},
+                                                      {"cross_verify", SCHEMA_OBJECT, 0},
+                                                      {NULL, 0, 0}};
 
 static const char *schema_type_name(schema_type_t t)
 {
@@ -289,7 +294,6 @@ int config_load(config_t *cfg)
    snprintf(cfg->guardrail_mode, sizeof(cfg->guardrail_mode), "%s", MODE_APPROVE);
    snprintf(cfg->provider, sizeof(cfg->provider), "claude");
    cfg->use_builtin_cli = 0;
-   cfg->block_raw_git = 0;
    snprintf(cfg->openai_endpoint, sizeof(cfg->openai_endpoint), "https://api.openai.com/v1");
    snprintf(cfg->openai_model, sizeof(cfg->openai_model), "gpt-4o");
    cfg->openai_key_cmd[0] = '\0';
@@ -377,10 +381,6 @@ int config_load(config_t *cfg)
    item = cJSON_GetObjectItemCaseSensitive(root, "use_builtin_cli");
    if (cJSON_IsBool(item))
       cfg->use_builtin_cli = cJSON_IsTrue(item);
-
-   item = cJSON_GetObjectItemCaseSensitive(root, "block_raw_git");
-   if (cJSON_IsBool(item))
-      cfg->block_raw_git = cJSON_IsTrue(item);
 
    item = cJSON_GetObjectItemCaseSensitive(root, "autonomous");
    if (cJSON_IsBool(item))
@@ -516,8 +516,6 @@ int config_save(const config_t *cfg)
 
    if (cfg->use_builtin_cli)
       cJSON_AddTrueToObject(root, "use_builtin_cli");
-   if (cfg->block_raw_git)
-      cJSON_AddTrueToObject(root, "block_raw_git");
    if (cfg->autonomous)
       cJSON_AddTrueToObject(root, "autonomous");
 
