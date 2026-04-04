@@ -1,7 +1,7 @@
 /* worktree.c: simplified worktree lifecycle — sibling worktree creation and cleanup.
  *
- * New model: one worktree per git repo per session, created as a sibling
- * directory next to the project root, named <project>-<short-session-id>.
+ * New model: one worktree per git repo per session, created as a hidden
+ * sibling directory next to the project root, named .aimee-<project>-<short-session-id>.
  * No DB registry, no GC system, no complex state tracking. */
 #define _GNU_SOURCE
 #include "aimee.h"
@@ -12,7 +12,7 @@
 
 /* Compute the expected sibling worktree path for a git repo and session.
  * For git_root="/root/dev/aimee" and session "abc123...", produces
- * "/root/dev/aimee-abc12345". */
+ * "/root/dev/.aimee-aimee-abc12345". */
 int worktree_sibling_path(const char *git_root, const char *sid, char *wt_buf, size_t wt_len)
 {
    if (!git_root || !sid || !wt_buf)
@@ -22,8 +22,30 @@ int worktree_sibling_path(const char *git_root, const char *sid, char *wt_buf, s
    char short_id[12];
    snprintf(short_id, sizeof(short_id), "%.8s", sid);
 
-   snprintf(wt_buf, wt_len, "%s-%s", git_root, short_id);
+   /* Split git_root into parent dir and basename, then produce
+    * <parent>/.aimee-<basename>-<short_id> */
+   char parent[MAX_PATH_LEN];
+   snprintf(parent, sizeof(parent), "%s", git_root);
+
+   const char *basename = git_root;
+   char *last_slash = strrchr(parent, '/');
+   if (last_slash && last_slash != parent)
+   {
+      *last_slash = '\0';
+      basename = last_slash + 1;
+   }
+   /* Handle git_root == "/" edge case */
+   if (last_slash == parent)
+      basename = parent + 1;
+
+   snprintf(wt_buf, wt_len, "%s/.aimee-%s-%s", parent, basename, short_id);
    return 0;
+}
+
+/* Check if a path is already inside an aimee worktree (contains /.aimee- component). */
+int is_aimee_worktree_path(const char *path)
+{
+   return path && strstr(path, "/.aimee-") != NULL;
 }
 
 /* Create a sibling worktree. Returns 0 on success, -1 on failure. */

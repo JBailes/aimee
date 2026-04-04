@@ -168,16 +168,16 @@ static void test_worktree_for_cwd(void)
 
    /* Set up worktree mapping */
    strcpy(state.worktrees[0].git_root, "/root/dev/aimee");
-   strcpy(state.worktrees[0].worktree_path, "/root/dev/aimee-abc12345");
+   strcpy(state.worktrees[0].worktree_path, "/root/dev/.aimee-aimee-abc12345");
    state.worktree_count = 1;
 
    /* CWD inside git root should match */
    const char *wt = worktree_for_cwd(&state, "/root/dev/aimee/src/memory.c");
    assert(wt != NULL);
-   assert(strcmp(wt, "/root/dev/aimee-abc12345") == 0);
+   assert(strcmp(wt, "/root/dev/.aimee-aimee-abc12345") == 0);
 
    /* CWD inside worktree should NOT match (already in worktree) */
-   wt = worktree_for_cwd(&state, "/root/dev/aimee-abc12345/src/memory.c");
+   wt = worktree_for_cwd(&state, "/root/dev/.aimee-aimee-abc12345/src/memory.c");
    assert(wt == NULL);
 
    /* CWD outside git root should not match */
@@ -197,20 +197,20 @@ static void test_worktree_prefers_specific_git_root(void)
 
    /* Set up worktrees for both parent "dev" and child "dev/aimee" */
    strcpy(state.worktrees[0].git_root, "/root/dev");
-   strcpy(state.worktrees[0].worktree_path, "/root/dev-abc12345");
+   strcpy(state.worktrees[0].worktree_path, "/root/.aimee-dev-abc12345");
    strcpy(state.worktrees[1].git_root, "/root/dev/aimee");
-   strcpy(state.worktrees[1].worktree_path, "/root/dev/aimee-abc12345");
+   strcpy(state.worktrees[1].worktree_path, "/root/dev/.aimee-aimee-abc12345");
    state.worktree_count = 2;
 
    /* Path inside /root/dev/aimee should match the aimee worktree, not dev */
    const char *wt = worktree_for_cwd(&state, "/root/dev/aimee/src/main.c");
    assert(wt != NULL);
-   assert(strcmp(wt, "/root/dev/aimee-abc12345") == 0);
+   assert(strcmp(wt, "/root/dev/.aimee-aimee-abc12345") == 0);
 
    /* Path directly inside /root/dev (not a child) should match dev */
    wt = worktree_for_cwd(&state, "/root/dev/other/file.c");
    assert(wt != NULL);
-   assert(strcmp(wt, "/root/dev-abc12345") == 0);
+   assert(strcmp(wt, "/root/.aimee-dev-abc12345") == 0);
 }
 
 static void test_worktree_sibling_path(void)
@@ -218,7 +218,7 @@ static void test_worktree_sibling_path(void)
    char buf[MAX_PATH_LEN];
    int rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", buf, sizeof(buf));
    assert(rc == 0);
-   assert(strcmp(buf, "/root/dev/aimee-fadc648f") == 0);
+   assert(strcmp(buf, "/root/dev/.aimee-aimee-fadc648f") == 0);
 }
 
 /* --- Deeper edge case tests --- */
@@ -637,20 +637,20 @@ static void test_worktree_for_cwd_edge_cases(void)
 
    /* Set up worktree mapping */
    strcpy(state.worktrees[0].git_root, "/root/dev/aimee");
-   strcpy(state.worktrees[0].worktree_path, "/root/dev/aimee-abc12345");
+   strcpy(state.worktrees[0].worktree_path, "/root/dev/.aimee-aimee-abc12345");
    state.worktree_count = 1;
 
    /* Exact git root match */
    const char *wt = worktree_for_cwd(&state, "/root/dev/aimee");
    assert(wt != NULL);
-   assert(strcmp(wt, "/root/dev/aimee-abc12345") == 0);
+   assert(strcmp(wt, "/root/dev/.aimee-aimee-abc12345") == 0);
 
    /* Subdirectory of git root */
    wt = worktree_for_cwd(&state, "/root/dev/aimee/src/memory.c");
    assert(wt != NULL);
 
    /* Already inside worktree — should return NULL */
-   wt = worktree_for_cwd(&state, "/root/dev/aimee-abc12345/src/memory.c");
+   wt = worktree_for_cwd(&state, "/root/dev/.aimee-aimee-abc12345/src/memory.c");
    assert(wt == NULL);
 
    /* Partial prefix match should NOT match (e.g. /root/dev/aimee2) */

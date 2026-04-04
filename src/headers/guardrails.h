@@ -19,7 +19,7 @@ typedef struct
 typedef struct
 {
    char git_root[MAX_PATH_LEN];    /* original repo root (e.g. /root/dev/aimee) */
-   char worktree_path[MAX_PATH_LEN]; /* sibling worktree (e.g. /root/dev/aimee-abc12345) */
+   char worktree_path[MAX_PATH_LEN]; /* sibling worktree (e.g. /root/dev/.aimee-aimee-abc12345) */
 } worktree_mapping_t;
 
 typedef struct
@@ -80,6 +80,9 @@ int git_repo_root(const char *dir, char *out_root, size_t out_len);
  * Writes result to wt_buf. Returns 0 on success. */
 int worktree_sibling_path(const char *git_root, const char *session_id,
                           char *wt_buf, size_t wt_len);
+
+/* Check if a path is already inside an aimee worktree (contains /.aimee- component). */
+int is_aimee_worktree_path(const char *path);
 
 /* Create a sibling worktree for a git repo. Returns 0 on success. */
 int worktree_create_sibling(const char *git_root, const char *session_id);
