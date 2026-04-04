@@ -773,6 +773,35 @@ static void test_hook_call_count_increments(void)
    db_close(db);
 }
 
+static void test_no_worktree_allows_non_workspace_writes(void)
+{
+   /* When worktree_count == 0 and the write is NOT inside a configured workspace,
+    * it should be allowed (no regression from auto-provision logic). */
+   sqlite3 *db = db_open(":memory:");
+   session_state_t state;
+   memset(&state, 0, sizeof(state));
+   strcpy(state.session_mode, MODE_IMPLEMENT);
+   strcpy(state.guardrail_mode, MODE_APPROVE);
+   /* worktree_count == 0: no worktrees provisioned */
+
+   char msg[1024] = "";
+   /* Edit to /tmp (not a workspace) should be allowed */
+   int rc = pre_tool_check(db, "Edit",
+                           "{\"file_path\":\"/tmp/test.c\","
+                           "\"old_string\":\"old\",\"new_string\":\"new\"}",
+                           &state, MODE_APPROVE, "/tmp", msg, sizeof(msg));
+   assert(rc == 0);
+
+   /* Bash write to /tmp should be allowed */
+   msg[0] = '\0';
+   rc = pre_tool_check(db, "Bash", "{\"command\":\"echo x > /tmp/test.c\"}", &state, MODE_APPROVE,
+                       "/tmp", msg, sizeof(msg));
+   assert(rc == 0);
+
+   db_stmt_cache_clear();
+   db_close(db);
+}
+
 int main(void)
 {
    test_classify_sensitive();
@@ -804,6 +833,7 @@ int main(void)
    test_worktree_blocks_cd_into_workspace();
    test_worktree_blocks_edit_to_real_workspace();
    test_hook_call_count_increments();
+   test_no_worktree_allows_non_workspace_writes();
    printf("guardrails: all tests passed\n");
    return 0;
 }
