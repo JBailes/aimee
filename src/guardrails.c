@@ -1451,4 +1451,3 @@ int worktree_entry_init(session_state_t *state, const char *dir, const char *sid
    state->worktree_count++;
    return 0;
 }
-
