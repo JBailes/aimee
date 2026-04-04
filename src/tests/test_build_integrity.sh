@@ -139,6 +139,38 @@ else
     fail "unit tests failed"
 fi
 
+# 10. Source file size budgets: no non-exempt .c file exceeds 1500 lines.
+# Existing large files are tracked in an explicit allowlist with current caps.
+# New files must stay under the budget. Existing files must not grow beyond their cap.
+MAX_LINES=1500
+declare -A EXEMPT=(
+    [webchat.c]=2700
+    [guardrails.c]=2000
+    [cmd_agent.c]=2000
+    [agent_tools.c]=1900
+    [mcp_git.c]=1750
+    [cmd_agent_trace.c]=1750
+    [cmd_hooks.c]=1700
+    [memory.c]=1600
+    [agent.c]=1600
+    [mcp_server.c]=1600
+    [db.c]=1600
+)
+oversized=""
+for f in *.c; do
+    [ -f "$f" ] || continue
+    lines=$(wc -l < "$f")
+    cap=${EXEMPT[$f]:-$MAX_LINES}
+    if [ "$lines" -gt "$cap" ]; then
+        oversized="$oversized $f($lines>$cap)"
+    fi
+done
+if [ -z "$oversized" ]; then
+    pass "all source files within size budget (max $MAX_LINES, ${#EXEMPT[@]} exempt)"
+else
+    fail "source files exceed size budget:$oversized"
+fi
+
 echo ""
 if [ "$FAIL" = "0" ]; then
     echo "All build integrity checks passed."
