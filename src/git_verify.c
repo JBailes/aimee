@@ -37,17 +37,56 @@ static cJSON *mcp_text(const char *text)
 
 /* --- Config loading --- */
 
-int verify_load_config(const char *project_root, verify_config_t *cfg)
+/* Check whether this looks like an aimee project (has .aimee/ dir). */
+static int has_aimee_dir(const char *project_root)
 {
-   memset(cfg, 0, sizeof(*cfg));
+   char path[MAX_PATH_LEN];
+   if (project_root && project_root[0])
+      snprintf(path, sizeof(path), "%s/.aimee", project_root);
+   else
+      snprintf(path, sizeof(path), ".aimee");
 
+   struct stat st;
+   return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+}
+
+/* Try to open a project.yaml, checking the external config dir first
+ * (~/.config/aimee/project.yaml), then falling back to the in-repo
+ * .aimee/project.yaml.  External config takes priority so that verify
+ * steps can be managed without touching tracked files.
+ * Only checks external config if a local .aimee/ directory exists
+ * (i.e., this is an aimee-managed project). */
+static FILE *open_project_yaml(const char *project_root)
+{
+   if (!has_aimee_dir(project_root))
+      return NULL;
+
+   /* 1. External config dir */
+   const char *home = getenv("HOME");
+   if (home)
+   {
+      char path[MAX_PATH_LEN];
+      snprintf(path, sizeof(path), "%s/.config/aimee/project.yaml", home);
+      FILE *f = fopen(path, "r");
+      if (f)
+         return f;
+   }
+
+   /* 2. In-repo .aimee/project.yaml */
    char path[MAX_PATH_LEN];
    if (project_root && project_root[0])
       snprintf(path, sizeof(path), "%s/.aimee/project.yaml", project_root);
    else
       snprintf(path, sizeof(path), ".aimee/project.yaml");
 
-   FILE *f = fopen(path, "r");
+   return fopen(path, "r");
+}
+
+int verify_load_config(const char *project_root, verify_config_t *cfg)
+{
+   memset(cfg, 0, sizeof(*cfg));
+
+   FILE *f = open_project_yaml(project_root);
    if (!f)
       return -1;
 
