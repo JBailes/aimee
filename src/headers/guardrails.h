@@ -43,8 +43,10 @@ int is_sensitive_file(const char *path);
 /* Classify a file path by sensitivity and blast radius. */
 classification_t classify_path(sqlite3 *db, const char *file_path);
 
-/* Pre-tool check. Returns exit code (0 = allow, 2 = block).
- * Message written to msg_buf if blocked. */
+/* Pre-tool check. Returns exit code:
+ *   0 = allow (msg_buf may contain warnings)
+ *   1 = allow with path rewrite (msg_buf contains rewritten absolute file path)
+ *   2 = block (msg_buf contains error message) */
 int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
                    session_state_t *state, const char *guardrail_mode, const char *cwd,
                    char *msg_buf, size_t msg_len);

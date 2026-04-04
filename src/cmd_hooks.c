@@ -136,6 +136,34 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
          }
       }
 
+      /* Worktree path rewrite: emit hookSpecificOutput with updatedInput so
+       * Claude Code silently re-targets the tool call at the worktree path. */
+      if (rc == 1 && msg[0])
+      {
+         cJSON *orig = cJSON_Parse(tool_input);
+         if (orig)
+         {
+            cJSON_ReplaceItemInObject(orig, "file_path", cJSON_CreateString(msg));
+
+            cJSON *output = cJSON_CreateObject();
+            cJSON *hook_out = cJSON_AddObjectToObject(output, "hookSpecificOutput");
+            cJSON_AddStringToObject(hook_out, "permissionDecision", "allow");
+            cJSON_AddItemToObject(hook_out, "updatedInput", orig);
+
+            char *js = cJSON_PrintUnformatted(output);
+            if (js)
+            {
+               fputs(js, stdout);
+               fputc('\n', stdout);
+               free(js);
+            }
+            cJSON_Delete(output);
+         }
+         ctx_db_close(ctx);
+         cJSON_Delete(json);
+         exit(0);
+      }
+
       if (ctx->json_output)
       {
          cJSON *j = cJSON_CreateObject();

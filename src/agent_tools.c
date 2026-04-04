@@ -1125,7 +1125,16 @@ char *dispatch_tool_call_ctx(const char *name, const char *arguments_json, int t
       if (guard_db)
          sqlite3_close(guard_db);
 
-      if (rc != 0)
+      if (rc == 1 && msg[0])
+      {
+         /* Worktree path rewrite: update file_path in args and continue */
+         cJSON *fp_arg = cJSON_GetObjectItem(args, "file_path");
+         if (!fp_arg)
+            fp_arg = cJSON_GetObjectItem(args, "path");
+         if (fp_arg)
+            cJSON_SetValuestring(fp_arg, msg);
+      }
+      else if (rc != 0)
       {
          /* Tool blocked by guardrails */
          cJSON_Delete(args);
