@@ -181,6 +181,7 @@ static int handle_server_info(server_ctx_t *ctx, server_conn_t *conn, cJSON *req
    cJSON_AddStringToObject(resp, "status", "ok");
    cJSON_AddNumberToObject(resp, "protocol_version", SERVER_PROTOCOL_VERSION);
    cJSON_AddStringToObject(resp, "server_version", AIMEE_VERSION);
+   cJSON_AddStringToObject(resp, "build_id", AIMEE_BUILD_ID);
    int rc = server_send_response(conn, resp);
    cJSON_Delete(resp);
    return rc;

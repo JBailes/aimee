@@ -11,6 +11,13 @@
 /* Version */
 #define AIMEE_VERSION "0.2.0"
 
+/* Build ID — used to detect stale server processes after make install.
+ * Generated once per build (see Makefile) and compiled into both client and
+ * server. If they differ, the client restarts the server. */
+#ifndef AIMEE_BUILD_ID
+#define AIMEE_BUILD_ID "dev"
+#endif
+
 /* Limits */
 #define MAX_PATH_LEN        4096
 #define MAX_QUERY_LEN       8192

@@ -1,7 +1,10 @@
 /* cli_client.c: shared client library for aimee-server Unix socket communication */
+#define _GNU_SOURCE
 #include "cli_client.h"
+#include "aimee.h"
 #include "cJSON.h"
 #define RPC_PROTOCOL_VERSION 1
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -316,6 +319,20 @@ static void release_spawn_lock(int fd)
 
 /* Try to reach a server at socket_path with a short timeout.
  * Returns 1 if available, 0 if not. */
+/* Get the PID of the peer process on a Unix socket connection (Linux only). */
+static pid_t get_peer_pid(int fd)
+{
+#ifdef __linux__
+   struct ucred cred;
+   socklen_t len = sizeof(cred);
+   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0)
+      return cred.pid;
+#else
+   (void)fd;
+#endif
+   return 0;
+}
+
 static int try_server(const char *socket_path, int timeout_ms)
 {
    cli_conn_t conn;
@@ -328,14 +345,44 @@ static int try_server(const char *socket_path, int timeout_ms)
    cJSON_Delete(req);
 
    int ok = 0;
+   int killed_stale = 0;
    if (resp)
    {
       cJSON *status = cJSON_GetObjectItemCaseSensitive(resp, "status");
       if (cJSON_IsString(status) && strcmp(status->valuestring, "ok") == 0)
          ok = 1;
+
+      /* Stale server detection: if the server's build timestamp differs from
+       * ours, the binary was updated but the server wasn't restarted. Kill it
+       * so cli_ensure_server will spawn a fresh one. The MCP proxy (thin client)
+       * auto-reconnects, so this is safe. */
+      if (ok)
+      {
+         cJSON *jbid = cJSON_GetObjectItemCaseSensitive(resp, "build_id");
+         const char *server_bid = cJSON_IsString(jbid) ? jbid->valuestring : "";
+         if (strcmp(server_bid, AIMEE_BUILD_ID) != 0)
+         {
+            pid_t server_pid = get_peer_pid(conn.fd);
+            fprintf(stderr,
+                    "aimee: server build mismatch (server=%s, client=%s) — restarting\n",
+                    server_bid[0] ? server_bid : "(unknown)", AIMEE_BUILD_ID);
+            if (server_pid > 1)
+            {
+               kill(server_pid, SIGTERM);
+               killed_stale = 1;
+            }
+            ok = 0;
+         }
+      }
+
       cJSON_Delete(resp);
    }
    cli_close(&conn);
+
+   /* Wait for the stale server to shut down and release the socket */
+   if (killed_stale)
+      usleep(300000);
+
    return ok;
 }
 

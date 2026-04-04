@@ -1,4 +1,5 @@
 /* cli_main.c: pure client entry point -- all commands go through aimee-server */
+#include "aimee.h"
 #include "cli_client.h"
 #include "cli_mcp_serve.h"
 #include "commands.h"
@@ -8,8 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#define AIMEE_VERSION "0.2.0"
 
 static void usage(void)
 {
