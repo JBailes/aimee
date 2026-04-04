@@ -90,6 +90,53 @@ Summary:
   ...
 ```
 
+### Continuation Message Template
+
+When resuming from a compacted session, inject this system message (validated by claw-code's `compact.rs`):
+
+```
+This session is being continued from a previous conversation that ran out of context.
+The summary below covers the earlier portion of the conversation.
+
+[formatted summary]
+
+Recent messages are preserved verbatim below this point.
+Continue the conversation from where it left off without asking the user to repeat
+anything. Do not re-summarize what was already done.
+```
+
+Include flags to suppress follow-up questions and note how many recent messages are preserved verbatim.
+
+### Configurable Model-Aware Context Limits
+
+Use configurable per-model token limits when deciding whether to compact. Defaults derived from claw-code's `max_tokens_for_model()`:
+
+```json
+{
+  "compact_model_limits": {
+    "claude-opus": 32000,
+    "claude-sonnet": 64000,
+    "claude-haiku": 64000,
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    "default": 64000
+  },
+  "compact_threshold_pct": 80
+}
+```
+
+- Model names are matched by prefix (e.g., `claude-opus` matches `claude-opus-4-6`)
+- `compact_threshold_pct` controls when compaction fires (default 80% of the model's limit)
+- Override via `aimee config set compact_model_limits.claude-opus 200000` for models with extended context
+- The `default` entry is used for unknown models
+
+### Webchat and Dashboard Integration
+
+Compaction events should be surfaced in both CLI and webchat:
+- **CLI**: Print a one-line notice: `[compacted: 42 messages → summary, 4 recent preserved]`
+- **Webchat**: Emit a `compaction` SSE event with message counts and summary; render as a collapsible system card in the chat UI
+- **Dashboard**: Show compaction count per delegate in the delegations table
+
 ## Acceptance Criteria
 
 - [ ] `session_estimate_tokens()` returns a fast approximation within 2x of actual token count
@@ -99,6 +146,9 @@ Summary:
 - [ ] Delegates to codex/ollama automatically compact when context would exceed model limit
 - [ ] Session resume with `--resume` compacts oversized session files
 - [ ] Compacted summaries include: scope, tools, recent requests, pending work, key files, timeline
+- [ ] Continuation message uses the standard template (no recap, no follow-up questions)
+- [ ] **Webchat**: compaction events appear as collapsible cards in chat UI
+- [ ] **Dashboard**: compaction count visible per delegation
 
 ## Owner and Effort
 

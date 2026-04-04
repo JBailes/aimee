@@ -77,3 +77,22 @@ When a compaction event is detected for a delegate session, inject a structured 
 Alternative: pin critical context so it never gets compacted. More reliable but reduces the effectiveness of compaction (less context freed). Structured summarization is a better balance.
 
 Inspiration: oh-my-openagent `src/hooks/compaction-context-injector/compaction-context-prompt.ts`
+
+## Additional Reference: claw-code compact.rs
+
+The claw-code project (`ultraworkers/claw-code`, `runtime/compact.rs`) validates this approach with a production implementation that extracts structured metadata heuristically (no LLM needed):
+
+- **File path extraction**: Scans content for paths containing `/` with recognized extensions (.c, .h, .rs, .py, .ts, .js, .json, .md, .yaml) — deduplicates into a "Key files" section
+- **Pending work detection**: Pattern-matches for "todo", "next", "pending", "follow up", "remaining" in message content
+- **Recent request extraction**: Last 3 user messages truncated to 160 chars
+- **Tool mention tracking**: Deduplicated list of tool names from tool_use blocks
+- **Iterative merge**: When re-compacting, existing summary highlights are preserved under "Previously compacted context" and new highlights under "Newly compacted context" — preventing cascading information loss
+
+These heuristic extractions complement the LLM-directed preservation template proposed here. The implementation should use both:
+1. The structured preservation template (this proposal) tells the model *what to focus on*
+2. The heuristic extraction (session-compaction proposal) ensures *minimum viable information* survives even if the model's summary is poor
+
+### Webchat Visibility
+
+- **Webchat**: When compaction occurs, show a collapsible "Compaction Summary" card in the chat thread with the structured preservation categories
+- **Dashboard**: Track "post-compaction task resumption success" as a metric per delegate
