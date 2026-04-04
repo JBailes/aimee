@@ -661,13 +661,11 @@ static char *build_session_context(sqlite3 *db)
    return buf;
 }
 
-/* Check if a directory is a git repository. */
+/* Check if a directory is inside a git repository. */
 static int is_git_repo(const char *dir)
 {
-   char git_path[MAX_PATH_LEN];
-   snprintf(git_path, sizeof(git_path), "%s/.git", dir);
-   struct stat st;
-   return stat(git_path, &st) == 0;
+   char root[MAX_PATH_LEN];
+   return git_repo_root(dir, root, sizeof(root)) == 0;
 }
 
 /* Remove worktrees for a single stale session directory. */
@@ -946,51 +944,15 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          continue;
       }
 
-      if (!is_git_repo(cfg.workspaces[i]))
-         continue;
-
-      const char *slash = strrchr(cfg.workspaces[i], '/');
-      const char *ws_name = slash ? slash + 1 : cfg.workspaces[i];
-
-      worktree_entry_t *w = &state.worktrees[state.worktree_count];
-      snprintf(w->name, sizeof(w->name), "%s", ws_name);
-      snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid, ws_name);
-      snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", cfg.workspaces[i]);
-      w->created = 0; /* deferred */
-      state.worktree_count++;
+      worktree_entry_init(&state, cfg.workspaces[i], sid);
    }
 
-   /* Auto-detect: if the current working directory is a git repo and not
-    * already covered by a configured workspace, register it too. This ensures
-    * worktree isolation even for repos not in the config.workspaces list. */
+   /* Auto-detect: if CWD is inside a git repo and not already covered,
+    * register it. worktree_entry_init resolves to git root and deduplicates. */
    {
       char cwd[MAX_PATH_LEN];
-      if (getcwd(cwd, sizeof(cwd)) && is_git_repo(cwd) && state.worktree_count < MAX_WORKTREES)
-      {
-         /* Check if cwd is already covered by an existing worktree entry */
-         int already_covered = 0;
-         for (int i = 0; i < state.worktree_count; i++)
-         {
-            if (strcmp(state.worktrees[i].workspace_root, cwd) == 0)
-            {
-               already_covered = 1;
-               break;
-            }
-         }
-         if (!already_covered)
-         {
-            const char *slash = strrchr(cwd, '/');
-            const char *ws_name = slash ? slash + 1 : cwd;
-
-            worktree_entry_t *w = &state.worktrees[state.worktree_count];
-            snprintf(w->name, sizeof(w->name), "%s", ws_name);
-            snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid,
-                     ws_name);
-            snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", cwd);
-            w->created = 0; /* deferred */
-            state.worktree_count++;
-         }
-      }
+      if (getcwd(cwd, sizeof(cwd)))
+         worktree_entry_init(&state, cwd, sid);
    }
 
    /* --- Session changelog: load previous HEADs, compute current HEADs --- */

@@ -760,55 +760,15 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
 
       if (matched_ws >= 0)
       {
-         /* Auto-provision worktree entries for all configured workspaces */
+         /* Auto-provision worktree entries for all configured workspaces.
+          * worktree_entry_init resolves to git root and deduplicates. */
          const char *sid = session_id();
-         for (int i = 0; i < acfg.workspace_count && state->worktree_count < MAX_WORKTREES; i++)
-         {
-            const char *slash = strrchr(acfg.workspaces[i], '/');
-            const char *ws_name = slash ? slash + 1 : acfg.workspaces[i];
+         for (int i = 0; i < acfg.workspace_count; i++)
+            worktree_entry_init(state, acfg.workspaces[i], sid);
 
-            worktree_entry_t *w = &state->worktrees[state->worktree_count];
-            snprintf(w->name, sizeof(w->name), "%s", ws_name);
-            snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid,
-                     ws_name);
-            snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", acfg.workspaces[i]);
-            w->created = 0; /* deferred — worktree_ensure() will create on demand */
-            state->worktree_count++;
-         }
-
-         /* Also add cwd if it's a git repo not already covered */
-         if (cwd[0] && state->worktree_count < MAX_WORKTREES)
-         {
-            int covered = 0;
-            for (int i = 0; i < state->worktree_count; i++)
-            {
-               if (strcmp(state->worktrees[i].workspace_root, cwd) == 0)
-               {
-                  covered = 1;
-                  break;
-               }
-            }
-            if (!covered)
-            {
-               /* Check for .git directory as a lightweight git repo test */
-               char git_dir[MAX_PATH_LEN];
-               snprintf(git_dir, sizeof(git_dir), "%s/.git", cwd);
-               struct stat gst;
-               if (stat(git_dir, &gst) == 0)
-               {
-                  const char *slash = strrchr(cwd, '/');
-                  const char *ws_name = slash ? slash + 1 : cwd;
-
-                  worktree_entry_t *w = &state->worktrees[state->worktree_count];
-                  snprintf(w->name, sizeof(w->name), "%s", ws_name);
-                  snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid,
-                           ws_name);
-                  snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", cwd);
-                  w->created = 0;
-                  state->worktree_count++;
-               }
-            }
-         }
+         /* Also add cwd if it's inside a git repo */
+         if (cwd[0])
+            worktree_entry_init(state, cwd, sid);
 
          state->dirty = 1;
          fprintf(stderr, "aimee: auto-provisioned %d worktree(s) — session-start did not run\n",
@@ -1052,37 +1012,22 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
    }
 
    /* Git command interception: block raw git/gh commands from Bash and redirect
-    * to aimee MCP git tools for token savings. Gated on config.block_raw_git.
-    * Allow raw git when cwd is inside a worktree (already isolated) or when
-    * the aimee CLI is used (e.g., "aimee git status" or "aimee --json git"). */
+    * to aimee MCP git tools for token savings. Gated on config.block_raw_git. */
    if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) && is_git_command(cmd->valuestring))
    {
       config_t git_cfg;
       config_load(&git_cfg);
       if (git_cfg.block_raw_git)
       {
-         /* Allow raw git inside worktrees — the workspace is already isolated.
-          * Detect worktree by checking if cwd is under a known worktree path. */
-         int cwd_is_worktree = (strstr(cwd, ".claude/worktrees") != NULL ||
-                                strstr(cwd, "/.config/aimee/worktrees/") != NULL);
-         /* Allow aimee CLI git wrappers (they go through aimee's own checks) */
-         const char *c = cmd->valuestring;
-         while (*c && isspace((unsigned char)*c))
-            c++;
-         int is_aimee_git = (strncmp(c, "aimee ", 6) == 0 || strncmp(c, "aimee\t", 6) == 0);
-
-         if (!cwd_is_worktree && !is_aimee_git)
-         {
-            snprintf(msg_buf, msg_len,
-                     "BLOCKED: use aimee MCP git tools instead of raw git/gh commands. "
-                     "Available: git_status, git_commit, git_push, git_pull, git_fetch, "
-                     "git_clone, git_branch, git_log, git_diff_summary, git_stash, "
-                     "git_tag, git_reset, git_restore, git_verify, git_pr "
-                     "(via mcp__aimee__ prefix). "
-                     "git_pr handles all gh pr/issue operations.");
-            cJSON_Delete(root);
-            return 2;
-         }
+         snprintf(msg_buf, msg_len,
+                  "BLOCKED: use aimee MCP git tools instead of raw git/gh commands. "
+                  "Available: git_status, git_commit, git_push, git_pull, git_fetch, "
+                  "git_clone, git_branch, git_log, git_diff_summary, git_stash, "
+                  "git_tag, git_reset, git_restore, git_verify, git_pr "
+                  "(via mcp__aimee__ prefix). "
+                  "git_pr handles all gh pr/issue operations.");
+         cJSON_Delete(root);
+         return 2;
       }
    }
 
@@ -1403,3 +1348,107 @@ static void write_state_json(const session_state_t *state, const char *path)
             cJSON_AddStringToObject(entry, "base_branch", state->worktrees[i].base_branch);
          cJSON_AddNumberToObject(entry, "created", state->worktrees[i].created);
          cJSON_AddItemToObject(wt, state->worktrees[i].name, entry);
+      }
+      cJSON_AddItemToObject(root, "worktrees", wt);
+   }
+
+   /* Serialize prev_main_head map */
+   {
+      int has_any = 0;
+      for (int i = 0; i < state->worktree_count; i++)
+      {
+         if (state->prev_main_head[i][0])
+         {
+            has_any = 1;
+            break;
+         }
+      }
+      if (has_any)
+      {
+         cJSON *pmh = cJSON_CreateObject();
+         for (int i = 0; i < state->worktree_count; i++)
+         {
+            if (state->prev_main_head[i][0])
+               cJSON_AddStringToObject(pmh, state->worktrees[i].name, state->prev_main_head[i]);
+         }
+         cJSON_AddItemToObject(root, "prev_main_head", pmh);
+      }
+   }
+
+   char *json = cJSON_PrintUnformatted(root);
+   cJSON_Delete(root);
+
+   if (json)
+   {
+      FILE *f = fopen(path, "w");
+      if (f)
+      {
+         fputs(json, f);
+         fclose(f);
+      }
+      free(json);
+   }
+}
+
+void session_state_save(const session_state_t *state, const char *path)
+{
+   if (!state->dirty)
+      return;
+   write_state_json(state, path);
+}
+
+void session_state_force_save(const session_state_t *state, const char *path)
+{
+   write_state_json(state, path);
+}
+
+/* Resolve the git repository root for a directory. Works for subdirectories
+ * and git worktrees (where .git is a file, not a directory). */
+int git_repo_root(const char *dir, char *out_root, size_t out_len)
+{
+   char cmd[MAX_PATH_LEN + 64];
+   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --show-toplevel 2>/dev/null", dir);
+   int rc;
+   char *out = run_cmd(cmd, &rc);
+   if (rc != 0 || !out || !out[0])
+   {
+      free(out);
+      return -1;
+   }
+   size_t len = strlen(out);
+   while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+      out[--len] = '\0';
+   snprintf(out_root, out_len, "%s", out);
+   free(out);
+   return 0;
+}
+
+/* Single place where workspace_root is set. Resolves any directory to the git
+ * repo root, deduplicates, and appends to state->worktrees. */
+int worktree_entry_init(session_state_t *state, const char *dir, const char *sid)
+{
+   if (state->worktree_count >= MAX_WORKTREES)
+      return -1;
+
+   char git_root[MAX_PATH_LEN];
+   if (git_repo_root(dir, git_root, sizeof(git_root)) != 0)
+      return -1;
+
+   for (int i = 0; i < state->worktree_count; i++)
+   {
+      if (strcmp(state->worktrees[i].workspace_root, git_root) == 0)
+         return 0;
+   }
+
+   const char *slash = strrchr(git_root, '/');
+   const char *ws_name = slash ? slash + 1 : git_root;
+
+   worktree_entry_t *w = &state->worktrees[state->worktree_count];
+   snprintf(w->name, sizeof(w->name), "%s", ws_name);
+   snprintf(w->path, sizeof(w->path), "%s/worktrees/%s/%s", config_output_dir(), sid, ws_name);
+   snprintf(w->workspace_root, sizeof(w->workspace_root), "%s", git_root);
+   w->created = 0;
+   state->worktree_count++;
+   return 0;
+}
+

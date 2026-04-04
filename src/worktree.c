@@ -1,5 +1,4 @@
-/* worktree.c: worktree lifecycle — creation, resolution, GC, and readiness gate.
- * Split from guardrails.c to stay within the source file size budget. */
+/* worktree.c: worktree lifecycle — creation, resolution, GC, and readiness gate. */
 #define _GNU_SOURCE
 #include "aimee.h"
 #include "cJSON.h"
@@ -458,7 +457,7 @@ int worktree_gc(sqlite3 *db, const config_t *cfg, int64_t disk_budget_bytes, int
          {
             sqlite3_bind_int64(upd, 1, sz);
             sqlite3_bind_int64(upd, 2, id);
-            DB_STEP_LOG(upd, "worktree_gc");
+            DB_STEP_LOG(upd, "guardrails");
          }
 
          freed += sz;
