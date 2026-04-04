@@ -4,6 +4,7 @@
 #include "dashboard.h"
 #include "agent_config.h"
 #include "agent_exec.h"
+#include "agent_protocol.h"
 #include "agent_tools.h"
 #include "platform_random.h"
 #include "commands.h"

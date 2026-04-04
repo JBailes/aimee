@@ -1,6 +1,7 @@
 /* cmd_chat.c: interactive chat CLI with streaming and tool use (OpenAI + Anthropic) */
 #include "aimee.h"
 #include "agent_exec.h"
+#include "agent_protocol.h"
 #include "agent_tools.h"
 #include "commands.h"
 #include "cJSON.h"

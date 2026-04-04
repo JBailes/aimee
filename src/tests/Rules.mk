@@ -83,7 +83,8 @@ tests/unit-test-tasks: $(OBJDIR)/tests/test_tasks.o $(OBJDIR)/tasks.o $(OBJDIR)/
                        $(OBJDIR)/render.o $(OBJDIR)/cJSON.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
 
-tests/unit-test-agent: $(OBJDIR)/tests/test_agent.o $(OBJDIR)/agent.o $(OBJDIR)/agent_policy.o \
+tests/unit-test-agent: $(OBJDIR)/tests/test_agent.o $(OBJDIR)/agent.o $(OBJDIR)/agent_protocol.o \
+                      $(OBJDIR)/agent_policy.o \
                       $(OBJDIR)/agent_context.o $(OBJDIR)/agent_config.o \
                       $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o $(OBJDIR)/agent_coord.o \
                       $(OBJDIR)/agent_jobs.o $(OBJDIR)/agent_tools.o $(OBJDIR)/agent_http.o \
@@ -137,7 +138,8 @@ tests/unit-test-memory-health: $(OBJDIR)/tests/test_memory_health.o $(TEST_DATA_
 tests/unit-test-workspace: $(OBJDIR)/tests/test_workspace.o $(TEST_DATA_OBJS) \
                           $(OBJDIR)/workspace.o $(OBJDIR)/working_memory.o \
                           $(OBJDIR)/agent_config.o $(OBJDIR)/cmd_describe.o \
-                          $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/agent.o $(OBJDIR)/agent_policy.o \
+                          $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/agent.o \
+                          $(OBJDIR)/agent_protocol.o $(OBJDIR)/agent_policy.o \
                           $(OBJDIR)/agent_context.o $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o \
                           $(OBJDIR)/agent_coord.o $(OBJDIR)/agent_jobs.o $(OBJDIR)/agent_tools.o \
                           $(OBJDIR)/agent_http.o $(OBJDIR)/agent_tunnel.o
@@ -159,7 +161,8 @@ tests/unit-test-cli-launch: $(OBJDIR)/tests/test_cli_launch.o $(OBJDIR)/cli_laun
 
 tests/unit-test-context-assembly: $(OBJDIR)/tests/test_context_assembly.o $(TEST_DATA_OBJS) \
                                  $(OBJDIR)/agent_context.o $(OBJDIR)/agent.o \
-                                 $(OBJDIR)/agent_policy.o $(OBJDIR)/agent_config.o \
+                                 $(OBJDIR)/agent_protocol.o $(OBJDIR)/agent_policy.o \
+                                 $(OBJDIR)/agent_config.o \
                                  $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o \
                                  $(OBJDIR)/agent_coord.o $(OBJDIR)/agent_jobs.o \
                                  $(OBJDIR)/agent_tools.o $(OBJDIR)/agent_http.o \

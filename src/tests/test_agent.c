@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include "aimee.h"
 #include "agent.h"
+#include "agent_protocol.h"
 #include "cJSON.h"
 
 /* --- Expose tool functions for testing via redeclaration --- */

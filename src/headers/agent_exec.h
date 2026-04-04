@@ -61,9 +61,6 @@ void agent_write_manifest(sqlite3 *db, const char *run_id, const agent_result_t 
 char *agent_load_project_contract(const char *project_root);
 char *agent_compress_tool_result(const char *raw, size_t raw_len);
 
-/* Merge consecutive same-role messages in-place. Returns merge count. */
-int messages_compact_consecutive(struct cJSON *messages);
-
 /* Provider health */
 typedef enum
 {
