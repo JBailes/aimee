@@ -669,8 +669,8 @@ cJSON *handle_git_branch(cJSON *args)
 
    char *esc_name = shell_escape(jname->valuestring);
 
-   /* Main branch protection: block switching to or deleting main/master */
-   if ((strcmp(action, "switch") == 0 || strcmp(action, "delete") == 0) &&
+   /* Main branch protection: block deleting main/master */
+   if (strcmp(action, "delete") == 0 &&
        (strcmp(jname->valuestring, "main") == 0 || strcmp(jname->valuestring, "master") == 0))
    {
       free(esc_name);
@@ -1239,9 +1239,6 @@ cJSON *handle_git_pr(cJSON *args)
 
 cJSON *handle_git_pull(cJSON *args)
 {
-   if (is_main_branch())
-      return main_branch_blocked("pull");
-
    cJSON *jrebase = cJSON_GetObjectItemCaseSensitive(args, "rebase");
    int rebase = (jrebase && cJSON_IsTrue(jrebase)) ? 1 : 0;
 
@@ -1367,10 +1364,6 @@ cJSON *handle_git_stash(cJSON *args)
    const char *action =
        (cJSON_IsString(jaction) && jaction->valuestring[0]) ? jaction->valuestring : "push";
 
-   /* Block stash mutations on main (allow list which is read-only) */
-   if (strcmp(action, "list") != 0 && is_main_branch())
-      return main_branch_blocked("stash");
-
    int rc;
    char cmd[1024];
 
@@ -1433,10 +1426,6 @@ cJSON *handle_git_tag(cJSON *args)
    cJSON *jaction = cJSON_GetObjectItemCaseSensitive(args, "action");
    const char *action =
        (cJSON_IsString(jaction) && jaction->valuestring[0]) ? jaction->valuestring : "list";
-
-   /* Block tag mutations on main (allow list which is read-only) */
-   if (strcmp(action, "list") != 0 && is_main_branch())
-      return main_branch_blocked("tag");
 
    int rc;
    char cmd[1024];
@@ -1616,9 +1605,6 @@ cJSON *handle_git_reset(cJSON *args)
 
 cJSON *handle_git_restore(cJSON *args)
 {
-   if (is_main_branch())
-      return main_branch_blocked("restore");
-
    cJSON *jfiles = cJSON_GetObjectItemCaseSensitive(args, "files");
    cJSON *jstaged = cJSON_GetObjectItemCaseSensitive(args, "staged");
    cJSON *jsource = cJSON_GetObjectItemCaseSensitive(args, "source");

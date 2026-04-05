@@ -622,62 +622,6 @@ static void test_main_branch_reset_blocked(void)
    teardown_git_repo();
 }
 
-static void test_main_branch_pull_blocked(void)
-{
-   setup_git_repo();
-
-   cJSON *args = cJSON_CreateObject();
-   cJSON *resp = handle_git_pull(args);
-   char *text = get_mcp_text(resp);
-   assert(text != NULL);
-   assert(strstr(text, "error") != NULL);
-   assert(strstr(text, "blocked") != NULL);
-   cJSON_Delete(resp);
-   cJSON_Delete(args);
-
-   teardown_git_repo();
-}
-
-static void test_main_branch_restore_blocked(void)
-{
-   setup_git_repo();
-
-   cJSON *args = cJSON_CreateObject();
-   cJSON *files = cJSON_CreateArray();
-   cJSON_AddItemToArray(files, cJSON_CreateString("file.txt"));
-   cJSON_AddItemToObject(args, "files", files);
-   cJSON *resp = handle_git_restore(args);
-   char *text = get_mcp_text(resp);
-   assert(text != NULL);
-   assert(strstr(text, "error") != NULL);
-   assert(strstr(text, "blocked") != NULL);
-   cJSON_Delete(resp);
-   cJSON_Delete(args);
-
-   teardown_git_repo();
-}
-
-static void test_main_branch_switch_to_main_blocked(void)
-{
-   setup_git_repo();
-
-   /* Switch away first */
-   system("git checkout -q -b temp-branch");
-
-   cJSON *args = cJSON_CreateObject();
-   cJSON_AddStringToObject(args, "action", "switch");
-   cJSON_AddStringToObject(args, "name", "main");
-   cJSON *resp = handle_git_branch(args);
-   char *text = get_mcp_text(resp);
-   assert(text != NULL);
-   assert(strstr(text, "error") != NULL);
-   assert(strstr(text, "blocked") != NULL);
-   cJSON_Delete(resp);
-   cJSON_Delete(args);
-
-   teardown_git_repo();
-}
-
 static void test_main_branch_delete_blocked(void)
 {
    setup_git_repo();
@@ -689,24 +633,6 @@ static void test_main_branch_delete_blocked(void)
    cJSON_AddStringToObject(args, "action", "delete");
    cJSON_AddStringToObject(args, "name", "main");
    cJSON *resp = handle_git_branch(args);
-   char *text = get_mcp_text(resp);
-   assert(text != NULL);
-   assert(strstr(text, "error") != NULL);
-   assert(strstr(text, "blocked") != NULL);
-   cJSON_Delete(resp);
-   cJSON_Delete(args);
-
-   teardown_git_repo();
-}
-
-static void test_main_branch_stash_blocked(void)
-{
-   setup_git_repo();
-
-   system("echo 'change' >> file.txt");
-   cJSON *args = cJSON_CreateObject();
-   cJSON_AddStringToObject(args, "action", "push");
-   cJSON *resp = handle_git_stash(args);
    char *text = get_mcp_text(resp);
    assert(text != NULL);
    assert(strstr(text, "error") != NULL);
@@ -768,11 +694,7 @@ int main(void)
    test_main_branch_commit_blocked();
    test_main_branch_push_blocked();
    test_main_branch_reset_blocked();
-   test_main_branch_pull_blocked();
-   test_main_branch_restore_blocked();
-   test_main_branch_switch_to_main_blocked();
    test_main_branch_delete_blocked();
-   test_main_branch_stash_blocked();
    test_feature_branch_commit_allowed();
 
    printf("all tests passed\n");
