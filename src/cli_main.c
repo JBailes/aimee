@@ -336,6 +336,40 @@ static int handle_hooks(int argc, char **argv, int json_output)
 
 /* Launch a session: forward "launch" to server, print session context,
  * chdir to worktree, and exec the provider CLI. */
+/* Accumulator for launch_session streaming: collects all output chunks */
+typedef struct
+{
+   char *buf;
+   size_t len;
+   size_t cap;
+} launch_accum_t;
+
+static int launch_stream_cb(cJSON *event, void *userdata)
+{
+   launch_accum_t *acc = (launch_accum_t *)userdata;
+   cJSON *jevt = cJSON_GetObjectItem(event, "event");
+   if (!jevt || !cJSON_IsString(jevt) || strcmp(jevt->valuestring, "output") != 0)
+      return 0;
+   cJSON *jdata = cJSON_GetObjectItem(event, "data");
+   if (!jdata || !cJSON_IsString(jdata))
+      return 0;
+
+   size_t chunk_len = strlen(jdata->valuestring);
+   if (acc->len + chunk_len >= acc->cap)
+   {
+      size_t new_cap = (acc->cap + chunk_len) * 2;
+      char *tmp = realloc(acc->buf, new_cap);
+      if (!tmp)
+         return -1;
+      acc->buf = tmp;
+      acc->cap = new_cap;
+   }
+   memcpy(acc->buf + acc->len, jdata->valuestring, chunk_len);
+   acc->len += chunk_len;
+   acc->buf[acc->len] = '\0';
+   return 0;
+}
+
 static int launch_session(int json_output, int debug)
 {
    const char *sock = cli_ensure_server();
@@ -369,29 +403,35 @@ static int launch_session(int json_output, int debug)
    if (getcwd(cwd, sizeof(cwd)))
       cJSON_AddStringToObject(req, "cwd", cwd);
 
-   cJSON *resp = cli_request(&conn, req, 300000);
+   /* Use streaming to accumulate output (server streams chunks in real-time) */
+   launch_accum_t acc = {.buf = malloc(8192), .len = 0, .cap = 8192};
+   if (acc.buf)
+      acc.buf[0] = '\0';
+
+   cJSON *resp = cli_request_stream(&conn, req, 300000, launch_stream_cb, &acc);
    cJSON_Delete(req);
    cli_close(&conn);
 
    if (!resp)
    {
+      free(acc.buf);
       fprintf(stderr, "aimee: no response from server\n");
       return 1;
    }
 
-   cJSON *joutput = cJSON_GetObjectItemCaseSensitive(resp, "output");
    cJSON *jexit = cJSON_GetObjectItemCaseSensitive(resp, "exit_code");
    int exit_code = cJSON_IsNumber(jexit) ? (int)jexit->valuedouble : 1;
 
    if (exit_code != 0)
    {
-      if (cJSON_IsString(joutput) && joutput->valuestring[0])
-         fputs(joutput->valuestring, stderr);
+      if (acc.buf && acc.buf[0])
+         fputs(acc.buf, stderr);
+      free(acc.buf);
       cJSON_Delete(resp);
       return exit_code;
    }
 
-   const char *output = cJSON_IsString(joutput) ? joutput->valuestring : "";
+   const char *output = acc.buf ? acc.buf : "";
 
    launch_meta_t meta;
    if (parse_launch_meta(output, &meta))
@@ -412,6 +452,7 @@ static int launch_session(int json_output, int debug)
             fprintf(stderr, "aimee: warning: could not chdir to worktree: %s\n", meta.worktree_cwd);
       }
 
+      free(acc.buf);
       cJSON_Delete(resp);
 
       if (meta.builtin)
@@ -457,6 +498,7 @@ static int launch_session(int json_output, int debug)
    if (output[0])
       fputs(output, stdout);
 
+   free(acc.buf);
    cJSON_Delete(resp);
    return exit_code;
 }
