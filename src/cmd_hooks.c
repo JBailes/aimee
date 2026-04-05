@@ -702,7 +702,7 @@ static void remove_stale_worktrees(const config_t *cfg, const char *sid)
    {
       char git_root[MAX_PATH_LEN];
       if (git_repo_root(cfg->workspaces[i], git_root, sizeof(git_root)) == 0)
-         worktree_cleanup(git_root, sid);
+         worktree_cleanup(git_root, sid, NULL);
    }
 }
 
@@ -916,7 +916,7 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
          {
             worktree_mapping_t *m = &state.worktrees[state.worktree_count];
             snprintf(m->git_root, sizeof(m->git_root), "%s", gr);
-            worktree_sibling_path(gr, sid, m->worktree_path, sizeof(m->worktree_path));
+            worktree_sibling_path(gr, sid, NULL, m->worktree_path, sizeof(m->worktree_path));
             state.worktree_count++;
          }
       }
@@ -943,7 +943,7 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
             {
                worktree_mapping_t *m = &state.worktrees[state.worktree_count];
                snprintf(m->git_root, sizeof(m->git_root), "%s", gr);
-               worktree_sibling_path(gr, sid, m->worktree_path, sizeof(m->worktree_path));
+               worktree_sibling_path(gr, sid, NULL, m->worktree_path, sizeof(m->worktree_path));
                state.worktree_count++;
             }
          }
@@ -1263,7 +1263,7 @@ void cmd_launch(app_ctx_t *ctx, int argc, char **argv)
    {
       const char *launch_sid = session_id();
       for (int i = 0; i < state.worktree_count; i++)
-         worktree_create_sibling(state.worktrees[i].git_root, launch_sid);
+         worktree_create_sibling(state.worktrees[i].git_root, launch_sid, NULL);
    }
 
    /* Output worktree directory mapping */
@@ -1344,7 +1344,7 @@ static void cleanup_worktrees(const session_state_t *state, const config_t *cfg,
       return;
 
    for (int i = 0; i < state->worktree_count; i++)
-      worktree_cleanup(state->worktrees[i].git_root, sid);
+      worktree_cleanup(state->worktrees[i].git_root, sid, NULL);
 }
 
 void cmd_wrapup(app_ctx_t *ctx, int argc, char **argv)

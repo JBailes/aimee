@@ -216,9 +216,16 @@ static void test_worktree_prefers_specific_git_root(void)
 static void test_worktree_sibling_path(void)
 {
    char buf[MAX_PATH_LEN];
-   int rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", buf, sizeof(buf));
+
+   /* Without work_name — session-level worktree */
+   int rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", NULL, buf, sizeof(buf));
    assert(rc == 0);
    assert(strcmp(buf, "/root/dev/.aimee-aimee-fadc648f") == 0);
+
+   /* With work_name — per-delegate worktree */
+   rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", "task01", buf, sizeof(buf));
+   assert(rc == 0);
+   assert(strcmp(buf, "/root/dev/.aimee-aimee-fadc648f-task01") == 0);
 }
 
 /* --- Deeper edge case tests --- */

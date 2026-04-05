@@ -11,7 +11,8 @@
 #include <unistd.h>
 
 /* Restore CWD after delegate completes and optionally clean up the worktree. */
-static void delegate_worktree_restore(const char *orig_cwd, const char *git_root, int keep)
+static void delegate_worktree_restore(const char *orig_cwd, const char *git_root,
+                                      const char *work_name, int keep)
 {
    if (orig_cwd[0])
       (void)chdir(orig_cwd);
@@ -20,11 +21,11 @@ static void delegate_worktree_restore(const char *orig_cwd, const char *git_root
    if (keep)
    {
       char wt_path[MAX_PATH_LEN];
-      worktree_sibling_path(git_root, session_id(), wt_path, sizeof(wt_path));
+      worktree_sibling_path(git_root, session_id(), work_name, wt_path, sizeof(wt_path));
       fprintf(stderr, "aimee: keeping delegate worktree at %s\n", wt_path);
       return;
    }
-   worktree_cleanup(git_root, session_id());
+   worktree_cleanup(git_root, session_id(), work_name);
 }
 
 /* --- cmd_delegate --- */
@@ -407,13 +408,21 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
 
    const char *final_prompt = effective_prompt ? effective_prompt : prompt;
 
-   /* Worktree isolation: if we're inside a git repo, use the standard sibling
-    * worktree (.aimee-<project>-<session>) so the delegate runs in isolation.
-    * This is the same worktree pattern used by hooks, MCP, and main — one
-    * canonical location per project per session. */
+   /* Worktree isolation: each delegate gets its own sibling worktree,
+    * keyed by session ID + a unique work name. This prevents collisions
+    * when multiple delegates run in the same session. */
    char worktree_path[MAX_PATH_LEN] = "";
    char original_cwd[MAX_PATH_LEN] = "";
    char delegate_git_root[MAX_PATH_LEN] = "";
+   char delegate_work_name[32] = "";
+   {
+      /* Generate a short unique work name for this delegate */
+      unsigned char wb[4];
+      if (platform_random_bytes(wb, sizeof(wb)) != 0)
+         memset(wb, 0, sizeof(wb));
+      snprintf(delegate_work_name, sizeof(delegate_work_name),
+               "%02x%02x%02x%02x", wb[0], wb[1], wb[2], wb[3]);
+   }
    {
       char cwd_buf[MAX_PATH_LEN];
       if (getcwd(cwd_buf, sizeof(cwd_buf)) && !is_aimee_worktree_path(cwd_buf) &&
@@ -422,9 +431,10 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
          snprintf(original_cwd, sizeof(original_cwd), "%s", cwd_buf);
          const char *sid = session_id();
 
-         if (worktree_create_sibling(delegate_git_root, sid) == 0)
+         if (worktree_create_sibling(delegate_git_root, sid, delegate_work_name) == 0)
          {
-            worktree_sibling_path(delegate_git_root, sid, worktree_path, sizeof(worktree_path));
+            worktree_sibling_path(delegate_git_root, sid, delegate_work_name,
+                                  worktree_path, sizeof(worktree_path));
 
             /* Compute equivalent subpath inside the worktree */
             size_t root_len = strlen(delegate_git_root);
@@ -576,7 +586,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
       char pid_path[MAX_PATH_LEN];
       snprintf(pid_path, sizeof(pid_path), "%s/%s.pid", tasks_dir, task_id);
       unlink(pid_path);
-      delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
+      delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
       free(result.response);
       free(effective_prompt);
       free(file_prompt);
@@ -744,7 +754,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
             fprintf(stderr, "aimee: WARN: delegate output above may contain errors "
                             "(verify failed)\n");
          }
-         delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
+         delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
          free(result.response);
          free(effective_prompt);
          free(file_prompt);
@@ -815,7 +825,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
          if (!of)
          {
             fprintf(stderr, "aimee: cannot write to --output path: %s\n", output_path);
-            delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
+            delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
             free(result.response);
             free(effective_prompt);
             free(file_prompt);
@@ -835,7 +845,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
    else
    {
       fprintf(stderr, "aimee delegate failed: %s\n", result.error);
-      delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
+      delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
       free(result.response);
       free(effective_prompt);
       free(file_prompt);
@@ -843,7 +853,7 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
       exit(2);
    }
 
-   delegate_worktree_restore(original_cwd, delegate_git_root, keep_worktree);
+   delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
 
    free(result.response);
    free(effective_prompt);

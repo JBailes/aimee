@@ -627,7 +627,7 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
       {
          const char *sid = session_id();
          char wt_path[MAX_PATH_LEN];
-         worktree_sibling_path(git_root_buf, sid, wt_path, sizeof(wt_path));
+         worktree_sibling_path(git_root_buf, sid, NULL, wt_path, sizeof(wt_path));
 
          /* If target is already inside the worktree path, allow */
          size_t wt_len = strlen(wt_path);
@@ -639,7 +639,7 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
             if (stat(wt_path, &wt_st) != 0)
             {
                /* Worktree doesn't exist yet — create it */
-               worktree_create_sibling(git_root_buf, sid);
+               worktree_create_sibling(git_root_buf, sid, NULL);
             }
 
             /* Register mapping in session state so MCP git tools can find it */

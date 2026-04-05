@@ -79,18 +79,24 @@ char *normalize_path(const char *path, const char *cwd, char *buf, size_t buf_le
 int git_repo_root(const char *dir, char *out_root, size_t out_len);
 
 /* Compute the expected sibling worktree path for a git repo and session.
+ * If work_name is non-NULL, it is appended to disambiguate multiple worktrees
+ * within the same session (e.g. parallel delegates).
  * Writes result to wt_buf. Returns 0 on success. */
 int worktree_sibling_path(const char *git_root, const char *session_id,
-                          char *wt_buf, size_t wt_len);
+                          const char *work_name, char *wt_buf, size_t wt_len);
 
 /* Check if a path is already inside an aimee worktree (contains /.aimee- component). */
 int is_aimee_worktree_path(const char *path);
 
-/* Create a sibling worktree for a git repo. Returns 0 on success. */
-int worktree_create_sibling(const char *git_root, const char *session_id);
+/* Create a sibling worktree for a git repo. Returns 0 on success.
+ * If work_name is non-NULL, creates a separate worktree for that work unit. */
+int worktree_create_sibling(const char *git_root, const char *session_id,
+                            const char *work_name);
 
-/* Clean up a session's worktree. Removes if clean, warns if dirty. */
-void worktree_cleanup(const char *git_root, const char *session_id);
+/* Clean up a session's worktree. Removes if clean, warns if dirty.
+ * If work_name is non-NULL, targets the work-specific worktree. */
+void worktree_cleanup(const char *git_root, const char *session_id,
+                      const char *work_name);
 
 /* Check if the current branch has a merged PR. Returns 1 if merged. */
 int check_merged_pr_for_branch(void);
