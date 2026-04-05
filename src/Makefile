@@ -65,7 +65,7 @@ CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/cJSON.o
 DATA_SRCS = memory.c memory_promote.c memory_context.c memory_scan.c \
             memory_graph.c memory_advanced.c trace_analysis.c \
             index.c extractors.c extractors_extra.c \
-            rules.c tasks.c feedback.c guardrails.c worktree.c \
+            rules.c tasks.c feedback.c guardrails.c worktree.c branch_ownership.c \
             workspace.c working_memory.c agent_config.c cmd_describe.c \
             secret_store.c
 DATA_OBJS = $(DATA_SRCS:%.c=$(OBJDIR)/%.o)

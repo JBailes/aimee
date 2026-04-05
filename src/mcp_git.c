@@ -3,6 +3,7 @@
 #include "cJSON.h"
 #include "headers/guardrails.h"
 #include "headers/git_verify.h"
+#include "headers/branch_ownership.h"
 #include "headers/util.h"
 #include <dirent.h>
 #include <stdio.h>
@@ -130,103 +131,6 @@ static cJSON *main_branch_blocked(const char *operation)
             "Create a feature branch first.",
             operation);
    return mcp_text(buf);
-}
-
-/* --- Branch ownership --- */
-
-/* Get the git repo root for the current cwd. Returns 0 on success. */
-static int get_repo_path(char *buf, size_t len)
-{
-   int rc;
-   char *out = run_cmd("git rev-parse --show-toplevel 2>/dev/null", &rc);
-   if (rc != 0 || !out)
-   {
-      free(out);
-      return -1;
-   }
-   char *nl = strchr(out, '\n');
-   if (nl)
-      *nl = '\0';
-   snprintf(buf, len, "%s", out);
-   free(out);
-   return 0;
-}
-
-/* Register branch ownership for the current session. Returns 0 on success. */
-static int branch_own_register(const char *branch)
-{
-   sqlite3 *db = mcp_db_get();
-   if (!db)
-      return -1;
-   char repo[MAX_PATH_LEN];
-   if (get_repo_path(repo, sizeof(repo)) != 0)
-      return -1;
-
-   sqlite3_stmt *st = db_prepare(
-       db, "INSERT OR REPLACE INTO branch_ownership (repo_path, branch_name, session_id) "
-           "VALUES (?, ?, ?)");
-   if (!st)
-      return -1;
-   sqlite3_bind_text(st, 1, repo, -1, SQLITE_TRANSIENT);
-   sqlite3_bind_text(st, 2, branch, -1, SQLITE_TRANSIENT);
-   sqlite3_bind_text(st, 3, session_id(), -1, SQLITE_TRANSIENT);
-   int rc = sqlite3_step(st);
-   return (rc == SQLITE_DONE) ? 0 : -1;
-}
-
-/* Delete branch ownership record. */
-static void branch_own_delete(const char *branch)
-{
-   sqlite3 *db = mcp_db_get();
-   if (!db)
-      return;
-   char repo[MAX_PATH_LEN];
-   if (get_repo_path(repo, sizeof(repo)) != 0)
-      return;
-
-   sqlite3_stmt *st =
-       db_prepare(db, "DELETE FROM branch_ownership WHERE repo_path = ? AND branch_name = ?");
-   if (!st)
-      return;
-   sqlite3_bind_text(st, 1, repo, -1, SQLITE_TRANSIENT);
-   sqlite3_bind_text(st, 2, branch, -1, SQLITE_TRANSIENT);
-   sqlite3_step(st);
-}
-
-/* Check if the current session can write to a branch.
- * Returns 1 if allowed, 0 if blocked (owner_out filled with owning session ID). */
-static int branch_own_check(const char *branch, char *owner_out, size_t owner_len)
-{
-   /* main/master are shared — never owned */
-   if (strcmp(branch, "main") == 0 || strcmp(branch, "master") == 0)
-      return 1;
-
-   sqlite3 *db = mcp_db_get();
-   if (!db)
-      return 1; /* no db = no enforcement */
-
-   char repo[MAX_PATH_LEN];
-   if (get_repo_path(repo, sizeof(repo)) != 0)
-      return 1;
-
-   sqlite3_stmt *st = db_prepare(
-       db, "SELECT session_id FROM branch_ownership WHERE repo_path = ? AND branch_name = ?");
-   if (!st)
-      return 1;
-   sqlite3_bind_text(st, 1, repo, -1, SQLITE_TRANSIENT);
-   sqlite3_bind_text(st, 2, branch, -1, SQLITE_TRANSIENT);
-
-   if (sqlite3_step(st) == SQLITE_ROW)
-   {
-      const char *owner = (const char *)sqlite3_column_text(st, 0);
-      if (strcmp(owner, session_id()) != 0)
-      {
-         snprintf(owner_out, owner_len, "%s", owner);
-         return 0; /* blocked */
-      }
-   }
-   /* No owner recorded or owned by current session = allowed */
-   return 1;
 }
 
 /* --- git_status --- */
@@ -382,6 +286,13 @@ cJSON *handle_git_commit(cJSON *args)
    if (is_main_branch())
       return main_branch_blocked("commit");
 
+   /* Branch ownership enforcement */
+   {
+      cJSON *blocked = branch_own_guard("commit");
+      if (blocked)
+         return blocked;
+   }
+
    cJSON *jfiles = cJSON_GetObjectItemCaseSensitive(args, "files");
 
    /* Stage files */
@@ -512,6 +423,13 @@ cJSON *handle_git_push(cJSON *args)
 {
    if (is_main_branch())
       return main_branch_blocked("push");
+
+   /* Branch ownership enforcement */
+   {
+      cJSON *blocked = branch_own_guard("push");
+      if (blocked)
+         return blocked;
+   }
 
    /* Merged-PR enforcement: block pushes to branches with merged PRs */
    {
@@ -1165,6 +1083,13 @@ cJSON *handle_git_pr(cJSON *args)
 
    if (strcmp(action, "create") == 0)
    {
+      /* Branch ownership enforcement */
+      {
+         cJSON *blocked = branch_own_guard("pr create");
+         if (blocked)
+            return blocked;
+      }
+
       /* Merged-PR enforcement: block creating PRs from branches with merged PRs */
       {
          char branch[256];
@@ -1557,6 +1482,13 @@ cJSON *handle_git_reset(cJSON *args)
 {
    if (is_main_branch())
       return main_branch_blocked("reset");
+
+   /* Branch ownership enforcement */
+   {
+      cJSON *blocked = branch_own_guard("reset");
+      if (blocked)
+         return blocked;
+   }
 
    cJSON *jref = cJSON_GetObjectItemCaseSensitive(args, "ref");
    const char *ref = (cJSON_IsString(jref) && jref->valuestring[0]) ? jref->valuestring : "HEAD~1";

@@ -437,7 +437,7 @@ static void test_branch_create_registers_ownership(void)
    teardown_git_repo();
 }
 
-static void test_commit_allowed_despite_other_session_ownership(void)
+static void test_commit_blocked_by_other_session_ownership(void)
 {
    setup_git_repo();
    setup_ownership_db();
@@ -451,13 +451,26 @@ static void test_commit_allowed_despite_other_session_ownership(void)
    cJSON_Delete(resp);
    cJSON_Delete(args);
 
-   /* Commit as session-B */
+   /* Commit as session-B should be blocked */
    session_id_set_override("session-B");
    system("echo 'change' >> file.txt");
    args = cJSON_CreateObject();
    cJSON_AddStringToObject(args, "message", "test commit");
    resp = handle_git_commit(args);
    char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   assert(strstr(text, "error") != NULL);
+   assert(strstr(text, "blocked") != NULL);
+   assert(strstr(text, "owned by session") != NULL);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+
+   /* Commit as session-A should succeed */
+   session_id_set_override("session-A");
+   args = cJSON_CreateObject();
+   cJSON_AddStringToObject(args, "message", "test commit");
+   resp = handle_git_commit(args);
+   text = get_mcp_text(resp);
    assert(text != NULL);
    assert(strstr(text, "committed:") != NULL);
    cJSON_Delete(resp);
@@ -468,7 +481,7 @@ static void test_commit_allowed_despite_other_session_ownership(void)
    teardown_git_repo();
 }
 
-static void test_push_allowed_despite_other_session_ownership(void)
+static void test_push_blocked_by_other_session_ownership(void)
 {
    setup_git_repo();
    setup_ownership_db();
@@ -482,26 +495,17 @@ static void test_push_allowed_despite_other_session_ownership(void)
    cJSON_Delete(resp);
    cJSON_Delete(args);
 
-   char remote_dir[] = "/tmp/aimee-test-mcp-git-remote-XXXXXX";
-   assert(mkdtemp(remote_dir) != NULL);
-
-   char cmd[1024];
-   snprintf(cmd, sizeof(cmd), "git init -q --bare '%s' && cd '%s' && git remote add origin '%s'",
-            remote_dir, g_tmpdir, remote_dir);
-   assert(system(cmd) == 0);
-
-   /* Push as session-B */
+   /* Push as session-B should be blocked */
    session_id_set_override("session-B");
    args = cJSON_CreateObject();
    resp = handle_git_push(args);
    char *text = get_mcp_text(resp);
    assert(text != NULL);
-   assert(strstr(text, "pushed:") != NULL);
+   assert(strstr(text, "error") != NULL);
+   assert(strstr(text, "blocked") != NULL);
+   assert(strstr(text, "owned by session") != NULL);
    cJSON_Delete(resp);
    cJSON_Delete(args);
-
-   snprintf(cmd, sizeof(cmd), "rm -rf '%s'", remote_dir);
-   system(cmd);
 
    session_id_clear_override();
    teardown_ownership_db();
@@ -685,8 +689,8 @@ int main(void)
 
    /* Branch ownership tests */
    test_branch_create_registers_ownership();
-   test_commit_allowed_despite_other_session_ownership();
-   test_push_allowed_despite_other_session_ownership();
+   test_commit_blocked_by_other_session_ownership();
+   test_push_blocked_by_other_session_ownership();
    test_branch_claim();
    test_main_branch_no_ownership();
 
