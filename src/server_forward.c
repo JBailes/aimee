@@ -13,7 +13,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define FORWARD_MAX_OUTPUT (4 * 1024 * 1024) /* 4MB max captured output */
 
 /* Compute context (same as server_compute.c) */
 typedef struct
@@ -308,26 +307,80 @@ static void forward_worker(void *arg)
       close(in_pipe[1]);
    }
 
-   /* Read captured output */
-   char *output = malloc(FORWARD_MAX_OUTPUT);
-   size_t output_len = 0;
-
-   if (output)
+   /* Stream output from child to client in real-time.
+    * Each chunk is sent as {"event":"output","data":"..."}\n so the client
+    * can display it immediately (important for interactive flows like OAuth). */
+   int child_status = 0;
+   int child_reaped = 0;
+   char chunk[4096];
+   for (;;)
    {
-      while (output_len < FORWARD_MAX_OUTPUT - 1)
+      struct pollfd pfd = {.fd = out_pipe[0], .events = POLLIN};
+      int pr = poll(&pfd, 1, 1000); /* 1s poll to check child liveness */
+      if (pr > 0 && (pfd.revents & POLLIN))
       {
-         ssize_t n = read(out_pipe[0], output + output_len, FORWARD_MAX_OUTPUT - 1 - output_len);
+         ssize_t n = read(out_pipe[0], chunk, sizeof(chunk) - 1);
          if (n <= 0)
             break;
-         output_len += (size_t)n;
+         chunk[n] = '\0';
+
+         cJSON *evt = cJSON_CreateObject();
+         cJSON_AddStringToObject(evt, "event", "output");
+         cJSON_AddStringToObject(evt, "data", chunk);
+         char *json_str = cJSON_PrintUnformatted(evt);
+         cJSON_Delete(evt);
+         if (json_str)
+         {
+            pthread_mutex_lock(fctx->write_mutex);
+            write_all_fwd(fctx->conn_fd, json_str, strlen(json_str));
+            write_all_fwd(fctx->conn_fd, "\n", 1);
+            pthread_mutex_unlock(fctx->write_mutex);
+            free(json_str);
+         }
       }
-      output[output_len] = '\0';
+      else if (pr == 0)
+      {
+         /* Poll timeout — check if child is still alive */
+         pid_t w = waitpid(pid, &child_status, WNOHANG);
+         if (w > 0)
+         {
+            child_reaped = 1;
+            /* Child exited; drain any remaining output */
+            for (;;)
+            {
+               ssize_t n = read(out_pipe[0], chunk, sizeof(chunk) - 1);
+               if (n <= 0)
+                  break;
+               chunk[n] = '\0';
+
+               cJSON *evt2 = cJSON_CreateObject();
+               cJSON_AddStringToObject(evt2, "event", "output");
+               cJSON_AddStringToObject(evt2, "data", chunk);
+               char *js2 = cJSON_PrintUnformatted(evt2);
+               cJSON_Delete(evt2);
+               if (js2)
+               {
+                  pthread_mutex_lock(fctx->write_mutex);
+                  write_all_fwd(fctx->conn_fd, js2, strlen(js2));
+                  write_all_fwd(fctx->conn_fd, "\n", 1);
+                  pthread_mutex_unlock(fctx->write_mutex);
+                  free(js2);
+               }
+            }
+            break;
+         }
+      }
+      else
+      {
+         /* poll error */
+         break;
+      }
    }
    close(out_pipe[0]);
 
-   int status = 0;
-   waitpid(pid, &status, 0);
-   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+   if (!child_reaped)
+      waitpid(pid, &child_status, 0);
+   int exit_code = WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 1;
 
    /* Session lifecycle tracking */
    if (strcmp(cmd_name, "launch") == 0 || strcmp(cmd_name, "session-start") == 0)
@@ -350,12 +403,11 @@ static void forward_worker(void *arg)
       }
    }
 
-   /* Build response */
+   /* Build final response (output was already streamed) */
    cJSON *resp = cJSON_CreateObject();
    cJSON_AddStringToObject(resp, "status", exit_code == 0 ? "ok" : "error");
-   cJSON_AddStringToObject(resp, "output", output ? output : "");
+   cJSON_AddStringToObject(resp, "output", "");
    cJSON_AddNumberToObject(resp, "exit_code", exit_code);
-   free(output);
 
    forward_respond(fctx, resp);
    forward_ctx_free(fctx);

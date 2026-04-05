@@ -138,6 +138,23 @@ static char *read_stdin(void)
    return buf;
 }
 
+/* Streaming callback: print output events as they arrive */
+static int forward_stream_cb(cJSON *event, void *userdata)
+{
+   (void)userdata;
+   cJSON *jevt = cJSON_GetObjectItem(event, "event");
+   if (!jevt || !cJSON_IsString(jevt))
+      return 0;
+
+   if (strcmp(jevt->valuestring, "output") == 0)
+   {
+      cJSON *jdata = cJSON_GetObjectItem(event, "data");
+      if (jdata && cJSON_IsString(jdata))
+         fputs(jdata->valuestring, stderr);
+   }
+   return 0;
+}
+
 /* Send a cli.forward request and print the output */
 static int forward_command(const char *cmd, int argc, char **argv, int json_output,
                            const char *stdin_data)
@@ -183,7 +200,10 @@ static int forward_command(const char *cmd, int argc, char **argv, int json_outp
    if (stdin_data)
       cJSON_AddStringToObject(req, "stdin", stdin_data);
 
-   cJSON *resp = cli_request(&conn, req, 300000); /* 5 minute timeout for long commands */
+   /* Use streaming request so output from interactive commands (like OAuth
+    * device flows) is displayed in real-time instead of being buffered. */
+   cJSON *resp =
+       cli_request_stream(&conn, req, 900000, forward_stream_cb, NULL); /* 15 min for OAuth flows */
    cJSON_Delete(req);
    cli_close(&conn);
 
@@ -193,13 +213,13 @@ static int forward_command(const char *cmd, int argc, char **argv, int json_outp
       return 1;
    }
 
+   /* Any remaining output in the final response (for backward compat) */
    cJSON *joutput = cJSON_GetObjectItemCaseSensitive(resp, "output");
    cJSON *jexit = cJSON_GetObjectItemCaseSensitive(resp, "exit_code");
 
    if (cJSON_IsString(joutput) && joutput->valuestring[0])
    {
       fputs(joutput->valuestring, stdout);
-      /* Ensure newline at end */
       size_t len = strlen(joutput->valuestring);
       if (len > 0 && joutput->valuestring[len - 1] != '\n')
          putchar('\n');

@@ -180,6 +180,99 @@ cJSON *cli_request(cli_conn_t *conn, cJSON *request, int timeout_ms)
    }
 }
 
+cJSON *cli_request_stream(cli_conn_t *conn, cJSON *request, int timeout_ms, cli_stream_cb cb,
+                          void *userdata)
+{
+   if (!conn || conn->fd < 0 || !request)
+      return NULL;
+
+   /* Serialize and send request */
+   char *json_str = cJSON_PrintUnformatted(request);
+   if (!json_str)
+      return NULL;
+
+   size_t json_len = strlen(json_str);
+   size_t total = 0;
+   while (total < json_len)
+   {
+      ssize_t n = write(conn->fd, json_str + total, json_len - total);
+      if (n < 0)
+      {
+         if (errno == EINTR)
+            continue;
+         free(json_str);
+         return NULL;
+      }
+      total += (size_t)n;
+   }
+   free(json_str);
+
+   char nl = '\n';
+   if (write(conn->fd, &nl, 1) != 1)
+      return NULL;
+
+   /* Read streaming responses: intermediate events have "event" field,
+    * the final message has "status" field. */
+   conn->read_len = 0;
+   for (;;)
+   {
+      /* Scan for a complete newline-delimited message in the buffer */
+      for (size_t i = 0; i < conn->read_len; i++)
+      {
+         if (conn->read_buf[i] == '\n')
+         {
+            conn->read_buf[i] = '\0';
+            cJSON *msg = cJSON_Parse(conn->read_buf);
+
+            /* Shift remaining data */
+            size_t remain = conn->read_len - i - 1;
+            if (remain > 0)
+               memmove(conn->read_buf, conn->read_buf + i + 1, remain);
+            conn->read_len = remain;
+
+            if (!msg)
+               continue; /* skip unparseable lines */
+
+            /* Check if this is a final response (has "status" field) */
+            if (cJSON_GetObjectItem(msg, "status"))
+               return msg;
+
+            /* Intermediate event — pass to callback */
+            if (cb)
+            {
+               int rc = cb(msg, userdata);
+               cJSON_Delete(msg);
+               if (rc != 0)
+                  return NULL; /* callback requested abort */
+            }
+            else
+            {
+               cJSON_Delete(msg);
+            }
+
+            /* Restart scan from beginning after memmove */
+            i = (size_t)-1; /* will be incremented to 0 */
+         }
+      }
+
+      /* Buffer full without newline */
+      if (conn->read_len >= CLIENT_READ_BUF_SIZE - 1)
+         return NULL;
+
+      /* Wait for more data */
+      struct pollfd pfd = {.fd = conn->fd, .events = POLLIN};
+      int rc = poll(&pfd, 1, timeout_ms);
+      if (rc <= 0)
+         return NULL;
+
+      ssize_t n = read(conn->fd, conn->read_buf + conn->read_len,
+                       CLIENT_READ_BUF_SIZE - 1 - conn->read_len);
+      if (n <= 0)
+         return NULL;
+      conn->read_len += (size_t)n;
+   }
+}
+
 int cli_server_available(const char *socket_path)
 {
    cli_conn_t conn;
