@@ -451,6 +451,7 @@ static const config_field_t config_fields[] = {
      0, CFG_STRING},
     {"embedding_command", offsetof(config_t, embedding_command),
      sizeof(((config_t *)0)->embedding_command), 0, CFG_STRING},
+    {"autonomous", offsetof(config_t, autonomous), sizeof(int), 1, CFG_BOOL},
     {"cross_verify", offsetof(config_t, cross_verify), sizeof(int), 1, CFG_BOOL},
     {"max_iterations", offsetof(config_t, max_iterations), sizeof(int), 0, CFG_INT},
     {"max_iterations_delegate", offsetof(config_t, max_iterations_delegate), sizeof(int), 0,
