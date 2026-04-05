@@ -950,6 +950,42 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv)
       }
    }
 
+   /* --- Auto-stash dirty main repos so new sessions start clean ---
+    * If a prior session left uncommitted changes in a workspace's main repo,
+    * stash them with a tagged message so the agent starts with a clean tree. */
+   for (int i = 0; i < state.worktree_count; i++)
+   {
+      const char *gr = state.worktrees[i].git_root;
+      if (!gr[0])
+         continue;
+
+      /* Skip if already inside an aimee worktree (not a main repo) */
+      if (is_aimee_worktree_path(gr))
+         continue;
+
+      char cmd[MAX_PATH_LEN + 128];
+      snprintf(cmd, sizeof(cmd), "git -C '%s' status --porcelain 2>/dev/null", gr);
+      int rc;
+      char *status = run_cmd(cmd, &rc);
+      int dirty = (rc == 0 && status && status[0]);
+      free(status);
+
+      if (dirty)
+      {
+         char stash_msg[256];
+         snprintf(stash_msg, sizeof(stash_msg), "aimee-autostash-%.8s", sid);
+         snprintf(cmd, sizeof(cmd),
+                  "git -C '%s' stash push --include-untracked -m '%s' 2>&1", gr, stash_msg);
+         char *out = run_cmd(cmd, &rc);
+         if (rc == 0)
+            fprintf(stderr, "aimee: auto-stashed dirty tree in %s (%s)\n", gr, stash_msg);
+         else
+            fprintf(stderr, "aimee: warning: failed to auto-stash %s: %s\n", gr,
+                    out ? out : "unknown");
+         free(out);
+      }
+   }
+
    /* --- Session changelog: load previous HEADs, compute current HEADs --- */
    char heads_path[MAX_PATH_LEN];
    snprintf(heads_path, sizeof(heads_path), "%s/main_heads.json", config_output_dir());
