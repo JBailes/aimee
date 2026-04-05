@@ -2322,6 +2322,11 @@ static void handle_request(SSL *ssl, int client_fd)
       }
 
       /* Multi-turn loop (may iterate for tool calls) */
+      config_t iter_cfg;
+      config_load(&iter_cfg);
+      int max_iter =
+          iter_cfg.max_iterations > 0 ? iter_cfg.max_iterations : CONFIG_DEFAULT_MAX_ITERATIONS;
+      int iteration = 0;
       for (;;)
       {
          wc_turn_reset(&turn);
@@ -2361,6 +2366,23 @@ static void handle_request(SSL *ssl, int client_fd)
             {
                sse_send(ssl, "error", "{\"message\":\"tool execution interrupted\"}");
                break;
+            }
+            iteration++;
+            if (iteration >= max_iter)
+            {
+               char iter_evt[128];
+               snprintf(iter_evt, sizeof(iter_evt),
+                        "{\"message\":\"iteration limit reached (%d/%d)\"}", iteration, max_iter);
+               sse_send(ssl, "warning", iter_evt);
+               if (turn.content && turn.content_len > 0)
+                  wc_add_assistant_text(session, &turn);
+               break;
+            }
+            {
+               char status_evt[128];
+               snprintf(status_evt, sizeof(status_evt), "{\"iteration\":%d,\"max\":%d}", iteration,
+                        max_iter);
+               sse_send(ssl, "iteration", status_evt);
             }
             continue; /* Next AI turn */
          }

@@ -1,6 +1,10 @@
 #ifndef DEC_CONFIG_H
 #define DEC_CONFIG_H 1
 
+/* Default iteration limits for chat loops (tool-call rounds per user message) */
+#define CONFIG_DEFAULT_MAX_ITERATIONS          15
+#define CONFIG_DEFAULT_MAX_ITERATIONS_DELEGATE  25
+
 typedef struct config
 {
    char db_path[MAX_PATH_LEN];
@@ -34,6 +38,11 @@ typedef struct config
    int retry_max_attempts; /* max retries (default 3) */
    int retry_base_ms;      /* initial backoff delay (default 1000) */
    int retry_max_ms;       /* backoff ceiling (default 30000) */
+
+   /* Agent iteration limits: cap tool-call rounds per user message.
+    * 0 = use default (15 interactive, 25 delegate). */
+   int max_iterations;          /* per-turn cap for interactive chat (default 15) */
+   int max_iterations_delegate; /* per-turn cap for delegate sessions (default 25) */
 } config_t;
 
 /* Config schema types for validation */

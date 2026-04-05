@@ -422,28 +422,40 @@ void cmd_import(app_ctx_t *ctx, int argc, char **argv)
 
 /* --- cmd_config --- */
 
+typedef enum
+{
+   CFG_STRING,
+   CFG_BOOL,
+   CFG_INT
+} config_field_type_t;
+
 typedef struct
 {
    const char *key;
    size_t offset;
    size_t size;
-   int is_bool;
+   int is_bool; /* legacy: 1 for bool fields */
+   config_field_type_t type;
 } config_field_t;
 
 static const config_field_t config_fields[] = {
-    {"provider", offsetof(config_t, provider), sizeof(((config_t *)0)->provider), 0},
-    {"use_builtin_cli", offsetof(config_t, use_builtin_cli), sizeof(int), 1},
+    {"provider", offsetof(config_t, provider), sizeof(((config_t *)0)->provider), 0, CFG_STRING},
+    {"use_builtin_cli", offsetof(config_t, use_builtin_cli), sizeof(int), 1, CFG_BOOL},
     {"openai_endpoint", offsetof(config_t, openai_endpoint),
-     sizeof(((config_t *)0)->openai_endpoint), 0},
-    {"openai_model", offsetof(config_t, openai_model), sizeof(((config_t *)0)->openai_model), 0},
+     sizeof(((config_t *)0)->openai_endpoint), 0, CFG_STRING},
+    {"openai_model", offsetof(config_t, openai_model), sizeof(((config_t *)0)->openai_model), 0,
+     CFG_STRING},
     {"openai_key_cmd", offsetof(config_t, openai_key_cmd), sizeof(((config_t *)0)->openai_key_cmd),
-     0},
+     0, CFG_STRING},
     {"guardrail_mode", offsetof(config_t, guardrail_mode), sizeof(((config_t *)0)->guardrail_mode),
-     0},
+     0, CFG_STRING},
     {"embedding_command", offsetof(config_t, embedding_command),
-     sizeof(((config_t *)0)->embedding_command), 0},
-    {"cross_verify", offsetof(config_t, cross_verify), sizeof(int), 1},
-    {NULL, 0, 0, 0},
+     sizeof(((config_t *)0)->embedding_command), 0, CFG_STRING},
+    {"cross_verify", offsetof(config_t, cross_verify), sizeof(int), 1, CFG_BOOL},
+    {"max_iterations", offsetof(config_t, max_iterations), sizeof(int), 0, CFG_INT},
+    {"max_iterations_delegate", offsetof(config_t, max_iterations_delegate), sizeof(int), 0,
+     CFG_INT},
+    {NULL, 0, 0, 0, CFG_STRING},
 };
 
 static const config_field_t *config_field_lookup(const char *key)
@@ -529,6 +541,11 @@ void cmd_config(app_ctx_t *ctx, int argc, char **argv)
          int val = *(int *)((char *)&cfg + f->offset);
          printf("%s\n", val ? "true" : "false");
       }
+      else if (f->type == CFG_INT)
+      {
+         int val = *(int *)((char *)&cfg + f->offset);
+         printf("%d\n", val);
+      }
       else
       {
          const char *val = (const char *)&cfg + f->offset;
@@ -573,6 +590,11 @@ void cmd_config(app_ctx_t *ctx, int argc, char **argv)
             fprintf(stderr, "Invalid boolean value: %s (use true/false)\n", value);
             return;
          }
+      }
+      else if (f->type == CFG_INT)
+      {
+         int *ptr = (int *)((char *)&cfg + f->offset);
+         *ptr = atoi(value);
       }
       else
       {

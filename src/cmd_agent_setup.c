@@ -118,7 +118,7 @@ static void setup_codex(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    ag->role_count = 0;
@@ -506,7 +506,7 @@ static void setup_codex_oauth(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    /* Set ChatGPT-Account-ID header if extracted from id_token */
@@ -592,7 +592,7 @@ static void setup_claude(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    ag->role_count = 0;
@@ -670,7 +670,7 @@ static void setup_gemini(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    ag->role_count = 0;
@@ -898,7 +898,7 @@ static void setup_gemini_oauth(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    ag->role_count = 0;
@@ -1018,7 +1018,7 @@ static void setup_openai(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    /* Parse roles */
@@ -1133,7 +1133,7 @@ static void setup_copilot(app_ctx_t *ctx, agent_config_t *cfg)
    ag->timeout_ms = 60000;
    ag->enabled = 1;
    ag->tools_enabled = 0;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
 
    ag->role_count = 0;

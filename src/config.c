@@ -171,14 +171,22 @@ int g_config_strict;
 
 /* --- Config schema --- */
 
-static const config_schema_entry_t config_schema[] = {
-    {"db_path", SCHEMA_STRING, 0},         {"guardrail_mode", SCHEMA_STRING, 0},
-    {"provider", SCHEMA_STRING, 0},        {"use_builtin_cli", SCHEMA_BOOL, 0},
-    {"openai_endpoint", SCHEMA_STRING, 0}, {"openai_model", SCHEMA_STRING, 0},
-    {"openai_key_cmd", SCHEMA_STRING, 0},  {"embedding_command", SCHEMA_STRING, 0},
-    {"workspace_root", SCHEMA_STRING, 0},  {"workspaces", SCHEMA_ARRAY, 0},
-    {"autonomous", SCHEMA_BOOL, 0},        {"cross_verify", SCHEMA_OBJECT, 0},
-    {"retry", SCHEMA_OBJECT, 0},           {NULL, 0, 0}};
+static const config_schema_entry_t config_schema[] = {{"db_path", SCHEMA_STRING, 0},
+                                                      {"guardrail_mode", SCHEMA_STRING, 0},
+                                                      {"provider", SCHEMA_STRING, 0},
+                                                      {"use_builtin_cli", SCHEMA_BOOL, 0},
+                                                      {"openai_endpoint", SCHEMA_STRING, 0},
+                                                      {"openai_model", SCHEMA_STRING, 0},
+                                                      {"openai_key_cmd", SCHEMA_STRING, 0},
+                                                      {"embedding_command", SCHEMA_STRING, 0},
+                                                      {"workspace_root", SCHEMA_STRING, 0},
+                                                      {"workspaces", SCHEMA_ARRAY, 0},
+                                                      {"autonomous", SCHEMA_BOOL, 0},
+                                                      {"cross_verify", SCHEMA_OBJECT, 0},
+                                                      {"retry", SCHEMA_OBJECT, 0},
+                                                      {"max_iterations", SCHEMA_INT, 0},
+                                                      {"max_iterations_delegate", SCHEMA_INT, 0},
+                                                      {NULL, 0, 0}};
 
 static const char *schema_type_name(schema_type_t t)
 {
@@ -478,6 +486,15 @@ int config_load(config_t *cfg)
          cfg->retry_max_ms = (int)item->valuedouble;
    }
 
+   /* Agent iteration limits */
+   item = cJSON_GetObjectItemCaseSensitive(root, "max_iterations");
+   if (cJSON_IsNumber(item))
+      cfg->max_iterations = (int)item->valuedouble;
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "max_iterations_delegate");
+   if (cJSON_IsNumber(item))
+      cfg->max_iterations_delegate = (int)item->valuedouble;
+
    cJSON_Delete(root);
 
    /* Update mtime cache */
@@ -557,6 +574,12 @@ int config_save(const config_t *cfg)
       if (cfg->verify_prompt[0])
          cJSON_AddStringToObject(cv, "prompt", cfg->verify_prompt);
    }
+
+   /* Agent iteration limits (only save if non-default) */
+   if (cfg->max_iterations)
+      cJSON_AddNumberToObject(root, "max_iterations", cfg->max_iterations);
+   if (cfg->max_iterations_delegate)
+      cJSON_AddNumberToObject(root, "max_iterations_delegate", cfg->max_iterations_delegate);
 
    /* API retry settings (only save if non-default) */
    if (cfg->retry_max_attempts || cfg->retry_base_ms || cfg->retry_max_ms)

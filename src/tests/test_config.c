@@ -147,6 +147,73 @@ int main(void)
       g_config_strict = 0;
    }
 
+   /* --- max_iterations: defaults to 0 (use compile-time default) --- */
+   {
+      char cpath[512];
+      snprintf(cpath, sizeof(cpath), "%s/.config/aimee/config.json", tmpdir);
+      FILE *f = fopen(cpath, "w");
+      assert(f);
+      fprintf(f, "{\"provider\":\"claude\"}");
+      fclose(f);
+
+      config_t cfg;
+      memset(&cfg, 0, sizeof(cfg));
+      int rc = config_load(&cfg);
+      assert(rc == 0);
+      assert(cfg.max_iterations == 0);          /* not set = 0 */
+      assert(cfg.max_iterations_delegate == 0); /* not set = 0 */
+   }
+
+   /* --- max_iterations: parsed from config --- */
+   {
+      char cpath[512];
+      snprintf(cpath, sizeof(cpath), "%s/.config/aimee/config.json", tmpdir);
+      FILE *f = fopen(cpath, "w");
+      assert(f);
+      fprintf(f, "{\"provider\":\"claude\",\"max_iterations\":10,\"max_iterations_delegate\":30}");
+      fclose(f);
+
+      config_t cfg;
+      memset(&cfg, 0, sizeof(cfg));
+      int rc = config_load(&cfg);
+      assert(rc == 0);
+      assert(cfg.max_iterations == 10);
+      assert(cfg.max_iterations_delegate == 30);
+   }
+
+   /* --- max_iterations: round-trip save/load --- */
+   {
+      config_t cfg;
+      memset(&cfg, 0, sizeof(cfg));
+      config_load(&cfg);
+      cfg.max_iterations = 5;
+      cfg.max_iterations_delegate = 50;
+      config_save(&cfg);
+
+      config_t cfg2;
+      memset(&cfg2, 0, sizeof(cfg2));
+      config_load(&cfg2);
+      assert(cfg2.max_iterations == 5);
+      assert(cfg2.max_iterations_delegate == 50);
+   }
+
+   /* --- max_iterations: effective defaults --- */
+   {
+      /* When config value is 0, code should use compile-time defaults */
+      assert(CONFIG_DEFAULT_MAX_ITERATIONS == 15);
+      assert(CONFIG_DEFAULT_MAX_ITERATIONS_DELEGATE == 25);
+
+      /* Simulate the effective calculation used in chat loops */
+      config_t cfg;
+      memset(&cfg, 0, sizeof(cfg));
+      int effective = cfg.max_iterations > 0 ? cfg.max_iterations : CONFIG_DEFAULT_MAX_ITERATIONS;
+      assert(effective == 15);
+
+      cfg.max_iterations = 8;
+      effective = cfg.max_iterations > 0 ? cfg.max_iterations : CONFIG_DEFAULT_MAX_ITERATIONS;
+      assert(effective == 8);
+   }
+
    unsetenv("AIMEE_NO_CACHE");
 
    /* Cleanup */

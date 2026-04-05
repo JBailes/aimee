@@ -1193,6 +1193,8 @@ void cmd_chat(app_ctx_t *ctx, int argc, char **argv)
       cJSON_AddItemToArray(state.messages, user_msg);
 
       /* Send and handle response (may loop for tool calls) */
+      int max_iter = cfg.max_iterations > 0 ? cfg.max_iterations : CONFIG_DEFAULT_MAX_ITERATIONS;
+      int iteration = 0;
       for (;;)
       {
          chat_reset_turn(&state);
@@ -1241,6 +1243,22 @@ void cmd_chat(app_ctx_t *ctx, int argc, char **argv)
                fprintf(stderr, "\n\033[2m(interrupted during tool execution)\033[0m\n\n");
                break;
             }
+            iteration++;
+            if (iteration >= max_iter)
+            {
+               fprintf(stderr, "\n\033[33mIteration limit reached (%d/%d)\033[0m\n", iteration,
+                       max_iter);
+               /* Return whatever content we have so far */
+               if (state.content && state.content_len > 0)
+               {
+                  fprintf(stdout, "\n\n");
+                  chat_add_assistant_text(&state);
+               }
+               break;
+            }
+            if (iteration == max_iter - 1)
+               fprintf(stderr, "\033[2m⚠ Iteration %d/%d — approaching limit\033[0m\n",
+                       iteration + 1, max_iter);
             continue;
          }
 
