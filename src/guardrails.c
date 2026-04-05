@@ -508,17 +508,17 @@ static int check_classification(session_state_t *state, classification_t *cls, c
    return 0;
 }
 
-/* Check if a Bash command contains any git write invocation
- * (commit, push, pull, reset, checkout, rebase, merge, stash, clean, tag,
- *  add, restore, rm, mv, branch -d/-D). */
+/* Check if a Bash command contains a git branch-mutating invocation
+ * (commit, push, reset, rebase, merge, cherry-pick). Working-tree-only
+ * operations (pull, stash, restore, checkout, tag, add, clean) are allowed
+ * so agents can still sync and inspect on main. */
 static int bash_has_git_write(const char *cmd)
 {
    if (!cmd)
       return 0;
 
-   static const char *git_write_subcmds[] = {
-       "commit", "push", "pull", "reset",   "checkout", "rebase", "merge",  "stash",
-       "clean",  "tag",  "add",  "restore", "rm",       "mv",     "branch", NULL};
+   static const char *git_write_subcmds[] = {"commit", "push",        "reset",       "rebase",
+                                             "merge",  "cherry-pick", "cherry_pick", NULL};
 
    const char *p = cmd;
    while ((p = strstr(p, "git")) != NULL)
