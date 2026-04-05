@@ -5,7 +5,7 @@
 
 #define CLIENT_DEFAULT_TIMEOUT_MS 5000
 #define CLIENT_CONNECT_TIMEOUT_MS 1000
-#define CLIENT_READ_BUF_SIZE      65536
+#define CLIENT_READ_BUF_SIZE      (256 * 1024) /* 256KB */
 
 /* Forward declaration -- cJSON.h included by .c files */
 typedef struct cJSON cJSON;
