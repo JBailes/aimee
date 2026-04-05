@@ -195,6 +195,9 @@ static void test_handle_git_commit_in_repo(void)
    assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
    assert(chdir(tmpdir) == 0);
 
+   /* Switch to a feature branch — commits on main are blocked */
+   system("git checkout -q -b test-feature");
+
    /* Modify and stage */
    FILE *fp = fopen("file.txt", "w");
    fputs("modified\n", fp);

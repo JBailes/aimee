@@ -90,6 +90,47 @@ static int check_branch_has_merged_pr(char *branch_buf, size_t branch_len)
    return has_merged;
 }
 
+/* --- Main branch protection --- */
+
+/* Get the current branch name. Returns 0 on success, -1 on failure.
+ * Writes branch name to buf. */
+static int get_current_branch(char *buf, size_t len)
+{
+   int rc;
+   char *out = run_cmd("git rev-parse --abbrev-ref HEAD 2>/dev/null", &rc);
+   if (rc != 0 || !out)
+   {
+      free(out);
+      return -1;
+   }
+   char *nl = strchr(out, '\n');
+   if (nl)
+      *nl = '\0';
+   snprintf(buf, len, "%s", out);
+   free(out);
+   return 0;
+}
+
+/* Check if the current branch is main or master. Returns 1 if on main/master. */
+static int is_main_branch(void)
+{
+   char branch[256];
+   if (get_current_branch(branch, sizeof(branch)) != 0)
+      return 0;
+   return (strcmp(branch, "main") == 0 || strcmp(branch, "master") == 0);
+}
+
+/* Return a standard error response for main branch protection.
+ * Caller should return the result directly from the handler. */
+static cJSON *main_branch_blocked(const char *operation)
+{
+   char buf[512];
+   snprintf(buf, sizeof(buf),
+            "error: %s blocked — writing to the main branch is not allowed. "
+            "Create a feature branch first.", operation);
+   return mcp_text(buf);
+}
+
 /* --- Branch ownership --- */
 
 /* Get the git repo root for the current cwd. Returns 0 on success. */
@@ -337,6 +378,9 @@ cJSON *handle_git_commit(cJSON *args)
    if (!cJSON_IsString(jmsg) || !jmsg->valuestring[0])
       return mcp_text("error: 'message' parameter is required");
 
+   if (is_main_branch())
+      return main_branch_blocked("commit");
+
    cJSON *jfiles = cJSON_GetObjectItemCaseSensitive(args, "files");
 
    /* Stage files */
@@ -465,6 +509,9 @@ cJSON *handle_git_commit(cJSON *args)
 
 cJSON *handle_git_push(cJSON *args)
 {
+   if (is_main_branch())
+      return main_branch_blocked("push");
+
    /* Merged-PR enforcement: block pushes to branches with merged PRs */
    {
       char branch[256];
@@ -620,6 +667,18 @@ cJSON *handle_git_branch(cJSON *args)
       return mcp_text("error: 'name' parameter is required for create/switch/delete");
 
    char *esc_name = shell_escape(jname->valuestring);
+
+   /* Main branch protection: block switching to or deleting main/master */
+   if ((strcmp(action, "switch") == 0 || strcmp(action, "delete") == 0) &&
+       (strcmp(jname->valuestring, "main") == 0 || strcmp(jname->valuestring, "master") == 0))
+   {
+      free(esc_name);
+      char buf[512];
+      snprintf(buf, sizeof(buf),
+               "error: %s '%s' blocked — writing to the main branch is not allowed. "
+               "Create a feature branch first.", action, jname->valuestring);
+      return mcp_text(buf);
+   }
 
    if (strcmp(action, "create") == 0)
    {
@@ -1178,6 +1237,9 @@ cJSON *handle_git_pr(cJSON *args)
 
 cJSON *handle_git_pull(cJSON *args)
 {
+   if (is_main_branch())
+      return main_branch_blocked("pull");
+
    cJSON *jrebase = cJSON_GetObjectItemCaseSensitive(args, "rebase");
    int rebase = (jrebase && cJSON_IsTrue(jrebase)) ? 1 : 0;
 
@@ -1303,6 +1365,10 @@ cJSON *handle_git_stash(cJSON *args)
    const char *action =
        (cJSON_IsString(jaction) && jaction->valuestring[0]) ? jaction->valuestring : "push";
 
+   /* Block stash mutations on main (allow list which is read-only) */
+   if (strcmp(action, "list") != 0 && is_main_branch())
+      return main_branch_blocked("stash");
+
    int rc;
    char cmd[1024];
 
@@ -1365,6 +1431,10 @@ cJSON *handle_git_tag(cJSON *args)
    cJSON *jaction = cJSON_GetObjectItemCaseSensitive(args, "action");
    const char *action =
        (cJSON_IsString(jaction) && jaction->valuestring[0]) ? jaction->valuestring : "list";
+
+   /* Block tag mutations on main (allow list which is read-only) */
+   if (strcmp(action, "list") != 0 && is_main_branch())
+      return main_branch_blocked("tag");
 
    int rc;
    char cmd[1024];
@@ -1494,6 +1564,9 @@ cJSON *handle_git_fetch(cJSON *args)
 
 cJSON *handle_git_reset(cJSON *args)
 {
+   if (is_main_branch())
+      return main_branch_blocked("reset");
+
    cJSON *jref = cJSON_GetObjectItemCaseSensitive(args, "ref");
    const char *ref = (cJSON_IsString(jref) && jref->valuestring[0]) ? jref->valuestring : "HEAD~1";
 
@@ -1541,6 +1614,9 @@ cJSON *handle_git_reset(cJSON *args)
 
 cJSON *handle_git_restore(cJSON *args)
 {
+   if (is_main_branch())
+      return main_branch_blocked("restore");
+
    cJSON *jfiles = cJSON_GetObjectItemCaseSensitive(args, "files");
    cJSON *jstaged = cJSON_GetObjectItemCaseSensitive(args, "staged");
    cJSON *jsource = cJSON_GetObjectItemCaseSensitive(args, "source");
