@@ -17,8 +17,8 @@
  * If work_name is non-NULL (e.g. "task01"), produces
  * "/root/dev/.aimee-aimee-abc12345-task01" to avoid collisions
  * when multiple delegates run in the same session. */
-int worktree_sibling_path(const char *git_root, const char *sid,
-                          const char *work_name, char *wt_buf, size_t wt_len)
+int worktree_sibling_path(const char *git_root, const char *sid, const char *work_name,
+                          char *wt_buf, size_t wt_len)
 {
    if (!git_root || !sid || !wt_buf)
       return -1;
@@ -58,8 +58,7 @@ int is_aimee_worktree_path(const char *path)
 
 /* Create a sibling worktree. Returns 0 on success, -1 on failure.
  * If work_name is non-NULL, creates a separate worktree for that work unit. */
-int worktree_create_sibling(const char *git_root, const char *sid,
-                            const char *work_name)
+int worktree_create_sibling(const char *git_root, const char *sid, const char *work_name)
 {
    if (!git_root || !sid)
       return -1;
@@ -134,8 +133,7 @@ int worktree_create_sibling(const char *git_root, const char *sid,
 
 /* Clean up a session's worktree. Removes if clean, warns if dirty.
  * If work_name is non-NULL, targets the work-specific worktree. */
-void worktree_cleanup(const char *git_root, const char *sid,
-                      const char *work_name)
+void worktree_cleanup(const char *git_root, const char *sid, const char *work_name)
 {
    if (!git_root || !sid)
       return;

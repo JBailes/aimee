@@ -420,8 +420,8 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
       unsigned char wb[4];
       if (platform_random_bytes(wb, sizeof(wb)) != 0)
          memset(wb, 0, sizeof(wb));
-      snprintf(delegate_work_name, sizeof(delegate_work_name),
-               "%02x%02x%02x%02x", wb[0], wb[1], wb[2], wb[3]);
+      snprintf(delegate_work_name, sizeof(delegate_work_name), "%02x%02x%02x%02x", wb[0], wb[1],
+               wb[2], wb[3]);
    }
    {
       char cwd_buf[MAX_PATH_LEN];
@@ -433,8 +433,8 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
 
          if (worktree_create_sibling(delegate_git_root, sid, delegate_work_name) == 0)
          {
-            worktree_sibling_path(delegate_git_root, sid, delegate_work_name,
-                                  worktree_path, sizeof(worktree_path));
+            worktree_sibling_path(delegate_git_root, sid, delegate_work_name, worktree_path,
+                                  sizeof(worktree_path));
 
             /* Compute equivalent subpath inside the worktree */
             size_t root_len = strlen(delegate_git_root);
@@ -754,7 +754,8 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
             fprintf(stderr, "aimee: WARN: delegate output above may contain errors "
                             "(verify failed)\n");
          }
-         delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
+         delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name,
+                                   keep_worktree);
          free(result.response);
          free(effective_prompt);
          free(file_prompt);
@@ -825,7 +826,8 @@ void cmd_delegate(app_ctx_t *ctx, int argc, char **argv)
          if (!of)
          {
             fprintf(stderr, "aimee: cannot write to --output path: %s\n", output_path);
-            delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name, keep_worktree);
+            delegate_worktree_restore(original_cwd, delegate_git_root, delegate_work_name,
+                                      keep_worktree);
             free(result.response);
             free(effective_prompt);
             free(file_prompt);
