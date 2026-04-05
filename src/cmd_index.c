@@ -4,7 +4,9 @@
 #include "workspace.h"
 #include "cJSON.h"
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* --- helpers --- */
@@ -77,30 +79,186 @@ static int get_real_repo_root(const char *repo_path, char *out, size_t out_len)
    return 0;
 }
 
-/* Discover git repos in a directory (recursively up to depth 10), scan each,
- * and register in config. */
-static int discover_and_scan(sqlite3 *db, const char *base_dir, int force, int verbose)
+/* --- parallel scan infrastructure --- */
+
+#define SCAN_MAX_PROJECTS 512
+#define SCAN_MAX_WORKERS  8
+
+typedef struct
+{
+   char path[MAX_PATH_LEN];
+   char name[128];
+   int scanned; /* result: files scanned */
+} scan_entry_t;
+
+/* Discover git repos in a directory, add them to an entry list (deduplicating). */
+static int discover_projects(const char *base_dir, scan_entry_t *entries, int *count, int max)
 {
    char projects[MAX_DISCOVERED_PROJECTS][MAX_PATH_LEN];
-   int count = workspace_discover_projects(base_dir, MAX_WORKSPACE_DEPTH, projects,
+   int found = workspace_discover_projects(base_dir, MAX_WORKSPACE_DEPTH, projects,
                                            MAX_DISCOVERED_PROJECTS);
-   if (count < 0)
+   if (found < 0)
       return -1;
 
-   for (int i = 0; i < count; i++)
+   int added = 0;
+   for (int i = 0; i < found && *count < max; i++)
    {
+      /* Dedup: skip if already in list */
+      int dup = 0;
+      for (int j = 0; j < *count; j++)
+      {
+         if (strcmp(entries[j].path, projects[i]) == 0)
+         {
+            dup = 1;
+            break;
+         }
+      }
+      if (dup)
+         continue;
+
+      scan_entry_t *e = &entries[*count];
+      snprintf(e->path, sizeof(e->path), "%s", projects[i]);
       const char *name = strrchr(projects[i], '/');
-      name = name ? name + 1 : projects[i];
-      int scanned = index_scan_project(db, name, projects[i], force);
-      if (verbose)
-         printf("  %-30s %3d file(s) scanned\n", name, scanned);
-      register_workspace_path(projects[i]);
+      snprintf(e->name, sizeof(e->name), "%s", name ? name + 1 : projects[i]);
+      e->scanned = 0;
+      (*count)++;
+      added++;
    }
 
-   if (count > 0)
+   if (added > 0)
       register_workspace_path(base_dir);
 
-   return count;
+   return added;
+}
+
+/* Scan a batch of projects in a forked child process.
+ * Each child gets its own sqlite connection (fork isolation).
+ * Results are written back through a pipe as "index:scanned\n" lines. */
+static pid_t scan_batch_fork(scan_entry_t *entries, int start, int end, int force,
+                             int verbose, int result_fd)
+{
+   pid_t pid = fork();
+   if (pid != 0)
+      return pid; /* parent returns child pid (or -1 on error) */
+
+   /* Child process: suppress DB error spam on stderr (expected during
+    * concurrent writes; FTS is rebuilt by the parent after all workers finish).
+    * Progress output goes to stdout instead. */
+   int devnull = open("/dev/null", O_WRONLY);
+   if (devnull >= 0)
+   {
+      dup2(devnull, STDERR_FILENO);
+      close(devnull);
+   }
+
+   sqlite3 *db = db_open_fast(NULL);
+   if (!db)
+      _exit(1);
+
+   int total = end; /* total for display (end of last batch) */
+   (void)total;
+
+   for (int i = start; i < end; i++)
+   {
+      scan_entry_t *e = &entries[i];
+
+      if (verbose)
+      {
+         printf("  [%d] scanning %s ...\n", i + 1, e->name);
+         fflush(stdout);
+      }
+
+      int scanned = index_scan_project(db, e->name, e->path, force);
+
+      if (verbose)
+      {
+         printf("  [%d] %s done (%d file(s))\n", i + 1, e->name, scanned);
+         fflush(stdout);
+      }
+
+      /* Report result through pipe */
+      char buf[16];
+      int n = snprintf(buf, sizeof(buf), "%d:%d\n", i, scanned);
+      (void)write(result_fd, buf, (size_t)n);
+   }
+
+   db_stmt_cache_clear_for(db);
+   sqlite3_close(db);
+   close(result_fd);
+   _exit(0);
+}
+
+/* Scan all entries in parallel using forked worker processes.
+ * Each worker gets its own DB connection (process isolation). */
+static void scan_entries_parallel(scan_entry_t *entries, int count, int force, int verbose)
+{
+   if (count == 0)
+      return;
+
+   int nworkers = SCAN_MAX_WORKERS;
+   if (nworkers > count)
+      nworkers = count;
+
+   /* Create pipe for results */
+   int pipefd[2];
+   if (pipe(pipefd) < 0)
+   {
+      fprintf(stderr, "aimee: pipe failed\n");
+      return;
+   }
+
+   /* Fork workers, distributing projects in round-robin batches */
+   pid_t pids[SCAN_MAX_WORKERS];
+   int batch_size = (count + nworkers - 1) / nworkers;
+
+   for (int w = 0; w < nworkers; w++)
+   {
+      int start = w * batch_size;
+      int end = start + batch_size;
+      if (end > count)
+         end = count;
+      if (start >= count)
+      {
+         pids[w] = -1;
+         continue;
+      }
+
+      pids[w] = scan_batch_fork(entries, start, end, force, verbose, pipefd[1]);
+      if (pids[w] < 0)
+         fprintf(stderr, "aimee: fork failed for batch %d\n", w);
+   }
+
+   /* Parent: close write end of pipe */
+   close(pipefd[1]);
+
+   /* Read results from pipe */
+   FILE *rf = fdopen(pipefd[0], "r");
+   if (rf)
+   {
+      char line[32];
+      while (fgets(line, sizeof(line), rf))
+      {
+         int idx, scanned;
+         if (sscanf(line, "%d:%d", &idx, &scanned) == 2 && idx >= 0 && idx < count)
+            entries[idx].scanned = scanned;
+      }
+      fclose(rf);
+   }
+   else
+   {
+      close(pipefd[0]);
+   }
+
+   /* Wait for all children */
+   for (int w = 0; w < nworkers; w++)
+   {
+      if (pids[w] > 0)
+         waitpid(pids[w], NULL, 0);
+   }
+
+   /* Register workspace paths after scan */
+   for (int i = 0; i < count; i++)
+      register_workspace_path(entries[i].path);
 }
 
 /* --- index subcommand handlers --- */
@@ -126,61 +284,69 @@ static void idx_scan(app_ctx_t *ctx, sqlite3 *db, int argc, char **argv)
       config_t cfg;
       config_load(&cfg);
 
-      int total_found = 0;
+      /* Phase 1: collect all projects from all workspaces (fast, no I/O) */
+      scan_entry_t *entries = calloc(SCAN_MAX_PROJECTS, sizeof(scan_entry_t));
+      if (!entries)
+         fatal("out of memory");
+      int total = 0;
 
       if (cfg.workspace_count > 0)
       {
-         /* Scan all configured workspaces */
          for (int w = 0; w < cfg.workspace_count; w++)
          {
-            if (verbose)
-               printf("==> Scanning workspace: %s\n", cfg.workspaces[w]);
-            int found = discover_and_scan(db, cfg.workspaces[w], force, verbose);
-            if (found > 0)
-               total_found += found;
+            discover_projects(cfg.workspaces[w], entries, &total, SCAN_MAX_PROJECTS);
 
-            /* If in a worktree, also scan the real repo root */
+            /* If in a worktree, also discover from the real repo root */
             char real_root[MAX_PATH_LEN];
             if (get_real_repo_root(cfg.workspaces[w], real_root, sizeof(real_root)) == 0 &&
                 strcmp(real_root, cfg.workspaces[w]) != 0)
             {
-               if (verbose)
-                  printf("==> Scanning worktree root: %s\n", real_root);
-               found = discover_and_scan(db, real_root, force, verbose);
-               if (found > 0)
-                  total_found += found;
+               discover_projects(real_root, entries, &total, SCAN_MAX_PROJECTS);
             }
          }
       }
       else
       {
-         /* No workspaces configured: auto-discover in CWD */
          char cwd[MAX_PATH_LEN];
          if (!getcwd(cwd, sizeof(cwd)))
             fatal("cannot get current directory");
 
-         if (verbose)
-            printf("==> Scanning: %s\n", cwd);
-         total_found = discover_and_scan(db, cwd, force, verbose);
+         discover_projects(cwd, entries, &total, SCAN_MAX_PROJECTS);
 
-         /* If in a worktree, also scan the real repo root */
          char real_root[MAX_PATH_LEN];
          if (get_real_repo_root(cwd, real_root, sizeof(real_root)) == 0 &&
              strcmp(real_root, cwd) != 0)
          {
-            if (verbose)
-               printf("==> Scanning worktree root: %s\n", real_root);
-            int found = discover_and_scan(db, real_root, force, verbose);
-            if (found > 0)
-               total_found += found;
+            discover_projects(real_root, entries, &total, SCAN_MAX_PROJECTS);
          }
 
-         if (total_found == 0)
+         if (total == 0)
             fatal("no workspaces configured and no git repos found in %s", cwd);
       }
 
       if (verbose)
-         printf("==> Scan complete: %d project(s)\n", total_found);
+      {
+         int nw = total < SCAN_MAX_WORKERS ? total : SCAN_MAX_WORKERS;
+         printf("==> Discovered %d project(s), scanning with %d workers...\n", total, nw);
+         fflush(stdout);
+      }
+
+      /* Phase 2: scan all projects in parallel (forked processes) */
+      scan_entries_parallel(entries, total, force, verbose);
+
+      /* Phase 3: rebuild FTS index (may be corrupted from concurrent writes) */
+      sqlite3_exec(db, "INSERT INTO code_fts(code_fts) VALUES('rebuild')", NULL, NULL, NULL);
+
+      /* Phase 4: print summary */
+      if (verbose)
+      {
+         int total_files = 0;
+         for (int i = 0; i < total; i++)
+            total_files += entries[i].scanned;
+         printf("==> Scan complete: %d project(s), %d file(s) scanned\n", total, total_files);
+      }
+
+      free(entries);
    }
    else
    {

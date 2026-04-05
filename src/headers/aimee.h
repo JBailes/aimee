@@ -25,7 +25,7 @@
 #define MAX_SESSION_RULES   20
 #define MAX_SESSION_CHARS   2000
 #define MAX_RULE_TEXT_LEN   120
-#define MAX_STMT_CACHE      64
+#define MAX_STMT_CACHE      256
 #define MAX_FILE_SIZE       (1 << 20) /* 1MB */
 #define MAX_CONTEXT_TOTAL   8000
 #define MAX_CONTEXT_MEMS    16
