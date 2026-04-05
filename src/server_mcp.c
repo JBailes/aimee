@@ -295,6 +295,9 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
 {
    char git_old_cwd[MAX_PATH_LEN] = {0};
 
+   /* Reset worktree flag for each dispatch — it's per-call, not sticky */
+   mcp_git_set_worktree(0);
+
    /* Set session ID override so mcp_chdir_git_root reads the correct git-cwd file */
    if (sid && sid[0])
       session_id_set_override(sid);

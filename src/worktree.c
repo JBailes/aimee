@@ -7,6 +7,7 @@
 #define _GNU_SOURCE
 #include "aimee.h"
 #include "cJSON.h"
+#include "headers/mcp_git.h"
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -123,6 +124,11 @@ int worktree_create_sibling(const char *git_root, const char *sid, const char *w
    {
       fprintf(stderr, "aimee: created worktree at %s\n", wt_path);
       free(out);
+
+      /* Register branch ownership so other sessions can't write to it.
+       * Use the main repo root (git_root), not the worktree path. */
+      mcp_git_branch_own_register(git_root, branch_name);
+
       return 0;
    }
 

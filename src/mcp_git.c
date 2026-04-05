@@ -134,10 +134,45 @@ static cJSON *main_branch_blocked(const char *operation)
 
 /* --- Branch ownership --- */
 
-/* Get the git repo root for the current cwd. Returns 0 on success. */
+/* Get the canonical git repo root for the current cwd. Returns 0 on success.
+ * In a worktree, --show-toplevel returns the worktree root, not the main repo.
+ * We use --git-common-dir to find the shared .git dir and derive the main root,
+ * so ownership records are consistent across main checkout and worktrees. */
 static int get_repo_path(char *buf, size_t len)
 {
    int rc;
+
+   /* Try --git-common-dir first: in a worktree this returns the absolute path
+    * to the main repo's .git dir (e.g. "/root/dev/aimee/.git").
+    * In a regular checkout it returns ".git" (relative). */
+   char *common = run_cmd("git rev-parse --git-common-dir 2>/dev/null", &rc);
+   if (rc == 0 && common)
+   {
+      char *nl = strchr(common, '\n');
+      if (nl)
+         *nl = '\0';
+
+      if (strcmp(common, ".git") != 0 && common[0] == '/')
+      {
+         /* Absolute path like "/root/dev/aimee/.git" or
+          * "/root/dev/aimee/.git/worktrees/..." — strip from /.git onward */
+         char *git_suffix = strstr(common, "/.git");
+         if (git_suffix)
+         {
+            *git_suffix = '\0';
+            snprintf(buf, len, "%s", common);
+            free(common);
+            return 0;
+         }
+      }
+      free(common);
+   }
+   else
+   {
+      free(common);
+   }
+
+   /* Fallback: regular checkout — use --show-toplevel */
    char *out = run_cmd("git rev-parse --show-toplevel 2>/dev/null", &rc);
    if (rc != 0 || !out)
    {
@@ -227,6 +262,47 @@ static int branch_own_check(const char *branch, char *owner_out, size_t owner_le
    }
    /* No owner recorded or owned by current session = allowed */
    return 1;
+}
+
+/* Public API for registering branch ownership with an explicit repo path.
+ * Used by worktree creation which creates branches outside the normal flow. */
+int mcp_git_branch_own_register(const char *repo_path, const char *branch)
+{
+   sqlite3 *db = mcp_db_get();
+   if (!db)
+      return -1;
+
+   sqlite3_stmt *st = db_prepare(
+       db, "INSERT OR REPLACE INTO branch_ownership (repo_path, branch_name, session_id) "
+           "VALUES (?, ?, ?)");
+   if (!st)
+      return -1;
+   sqlite3_bind_text(st, 1, repo_path, -1, SQLITE_TRANSIENT);
+   sqlite3_bind_text(st, 2, branch, -1, SQLITE_TRANSIENT);
+   sqlite3_bind_text(st, 3, session_id(), -1, SQLITE_TRANSIENT);
+   int rc = sqlite3_step(st);
+   return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+/* Check branch ownership for the current branch. Returns NULL if allowed,
+ * or an error response if blocked by another session's ownership. */
+static cJSON *branch_own_guard(const char *operation)
+{
+   char branch[256];
+   if (get_current_branch(branch, sizeof(branch)) != 0)
+      return NULL; /* can't determine branch — allow */
+
+   char owner[64];
+   if (!branch_own_check(branch, owner, sizeof(owner)))
+   {
+      char buf[512];
+      snprintf(buf, sizeof(buf),
+               "error: %s blocked — branch '%s' is owned by session %.20s. "
+               "Use git_branch action=claim to take ownership.",
+               operation, branch, owner);
+      return mcp_text(buf);
+   }
+   return NULL; /* allowed */
 }
 
 /* --- git_status --- */
@@ -382,6 +458,13 @@ cJSON *handle_git_commit(cJSON *args)
    if (is_main_branch())
       return main_branch_blocked("commit");
 
+   /* Branch ownership enforcement */
+   {
+      cJSON *blocked = branch_own_guard("commit");
+      if (blocked)
+         return blocked;
+   }
+
    cJSON *jfiles = cJSON_GetObjectItemCaseSensitive(args, "files");
 
    /* Stage files */
@@ -512,6 +595,13 @@ cJSON *handle_git_push(cJSON *args)
 {
    if (is_main_branch())
       return main_branch_blocked("push");
+
+   /* Branch ownership enforcement */
+   {
+      cJSON *blocked = branch_own_guard("push");
+      if (blocked)
+         return blocked;
+   }
 
    /* Merged-PR enforcement: block pushes to branches with merged PRs */
    {
@@ -1165,6 +1255,13 @@ cJSON *handle_git_pr(cJSON *args)
 
    if (strcmp(action, "create") == 0)
    {
+      /* Branch ownership enforcement */
+      {
+         cJSON *blocked = branch_own_guard("pr create");
+         if (blocked)
+            return blocked;
+      }
+
       /* Merged-PR enforcement: block creating PRs from branches with merged PRs */
       {
          char branch[256];
@@ -1557,6 +1654,13 @@ cJSON *handle_git_reset(cJSON *args)
 {
    if (is_main_branch())
       return main_branch_blocked("reset");
+
+   /* Branch ownership enforcement */
+   {
+      cJSON *blocked = branch_own_guard("reset");
+      if (blocked)
+         return blocked;
+   }
 
    cJSON *jref = cJSON_GetObjectItemCaseSensitive(args, "ref");
    const char *ref = (cJSON_IsString(jref) && jref->valuestring[0]) ? jref->valuestring : "HEAD~1";

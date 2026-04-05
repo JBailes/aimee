@@ -51,7 +51,7 @@ tests/unit-test-rules: $(OBJDIR)/tests/test_rules.o $(OBJDIR)/rules.o $(OBJDIR)/
                        $(OBJDIR)/platform_random.o $(OBJDIR)/cJSON.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
 
-tests/unit-test-guardrails: $(OBJDIR)/tests/test_guardrails.o $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o \
+tests/unit-test-guardrails: $(OBJDIR)/tests/test_guardrails.o $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/mcp_git.o $(OBJDIR)/git_verify.o \
                             $(OBJDIR)/db.o $(OBJDIR)/config.o $(OBJDIR)/util.o $(OBJDIR)/text.o \
                             $(OBJDIR)/platform_random.o \
                             $(OBJDIR)/index.o $(OBJDIR)/extractors.o \
@@ -97,7 +97,7 @@ tests/unit-test-agent: $(OBJDIR)/tests/test_agent.o $(OBJDIR)/agent.o $(OBJDIR)/
                       $(OBJDIR)/memory_promote.o $(OBJDIR)/memory_context.o \
                       $(OBJDIR)/memory_scan.o $(OBJDIR)/memory_graph.o \
                       $(OBJDIR)/memory_advanced.o $(OBJDIR)/index.o $(OBJDIR)/extractors.o \
-                      $(OBJDIR)/extractors_extra.o $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o \
+                      $(OBJDIR)/extractors_extra.o $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/mcp_git.o $(OBJDIR)/git_verify.o \
                       $(OBJDIR)/tasks.o $(OBJDIR)/render.o \
                       $(OBJDIR)/working_memory.o $(OBJDIR)/workspace.o $(OBJDIR)/cmd_describe.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
@@ -140,7 +140,7 @@ tests/unit-test-memory-health: $(OBJDIR)/tests/test_memory_health.o $(TEST_DATA_
 tests/unit-test-workspace: $(OBJDIR)/tests/test_workspace.o $(TEST_DATA_OBJS) \
                           $(OBJDIR)/workspace.o $(OBJDIR)/working_memory.o \
                           $(OBJDIR)/agent_config.o $(OBJDIR)/cmd_describe.o \
-                          $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/agent.o \
+                          $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/mcp_git.o $(OBJDIR)/git_verify.o $(OBJDIR)/agent.o \
                           $(OBJDIR)/agent_protocol.o $(OBJDIR)/agent_policy.o \
                           $(OBJDIR)/agent_context.o $(OBJDIR)/agent_plan.o $(OBJDIR)/agent_eval.o \
                           $(OBJDIR)/agent_coord.o $(OBJDIR)/agent_jobs.o $(OBJDIR)/agent_tools.o \
@@ -170,7 +170,7 @@ tests/unit-test-context-assembly: $(OBJDIR)/tests/test_context_assembly.o $(TEST
                                  $(OBJDIR)/agent_tools.o $(OBJDIR)/agent_http.o \
                                  $(OBJDIR)/http_retry.o $(OBJDIR)/agent_tunnel.o \
                                  $(OBJDIR)/working_memory.o \
-                                 $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/workspace.o \
+                                 $(OBJDIR)/guardrails.o $(OBJDIR)/worktree.o $(OBJDIR)/mcp_git.o $(OBJDIR)/git_verify.o $(OBJDIR)/workspace.o \
                                  $(OBJDIR)/cmd_describe.o
 	$(CC) -o $@ $^ $(TEST_L_FLAGS)
 
