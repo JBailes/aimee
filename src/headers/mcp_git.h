@@ -26,10 +26,6 @@ cJSON *handle_git_restore(cJSON *args);
 void mcp_git_set_worktree(int val);
 int mcp_git_get_worktree(void);
 
-/* Register branch ownership for the current session in the given repo.
- * Used by worktree creation to track branches it creates. */
-int mcp_git_branch_own_register(const char *repo_path, const char *branch);
-
 /* Change to git root directory before running git tools.
  * Saves old cwd in old_cwd. Returns 1 if chdir happened, 0 otherwise.
  * Caller should restore old_cwd when done. */
