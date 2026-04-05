@@ -517,9 +517,8 @@ static int bash_has_git_write(const char *cmd)
       return 0;
 
    static const char *git_write_subcmds[] = {
-       "commit",  "push",    "pull",    "reset",   "checkout", "rebase",
-       "merge",   "stash",   "clean",   "tag",     "add",      "restore",
-       "rm",      "mv",      "branch",  NULL};
+       "commit", "push", "pull", "reset",   "checkout", "rebase", "merge",  "stash",
+       "clean",  "tag",  "add",  "restore", "rm",       "mv",     "branch", NULL};
 
    const char *p = cmd;
    while ((p = strstr(p, "git")) != NULL)

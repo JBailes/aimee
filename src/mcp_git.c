@@ -127,7 +127,8 @@ static cJSON *main_branch_blocked(const char *operation)
    char buf[512];
    snprintf(buf, sizeof(buf),
             "error: %s blocked — writing to the main branch is not allowed. "
-            "Create a feature branch first.", operation);
+            "Create a feature branch first.",
+            operation);
    return mcp_text(buf);
 }
 
@@ -676,7 +677,8 @@ cJSON *handle_git_branch(cJSON *args)
       char buf[512];
       snprintf(buf, sizeof(buf),
                "error: %s '%s' blocked — writing to the main branch is not allowed. "
-               "Create a feature branch first.", action, jname->valuestring);
+               "Create a feature branch first.",
+               action, jname->valuestring);
       return mcp_text(buf);
    }
 
