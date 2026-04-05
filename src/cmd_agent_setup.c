@@ -326,10 +326,12 @@ static void setup_codex_oauth(app_ctx_t *ctx, agent_config_t *cfg)
             break;
       }
 
-      /* 403/404 means still pending */
-      if (poll_status == 403 || poll_status == 404)
+      /* 403/404 means still pending; 429 means rate-limited – retry both */
+      if (poll_status == 403 || poll_status == 404 || poll_status == 429)
       {
          fprintf(stderr, ".");
+         if (poll_status == 429)
+            sleep((unsigned)interval); /* extra back-off on rate limit */
          continue;
       }
 
