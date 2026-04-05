@@ -2330,6 +2330,7 @@ static void handle_request(SSL *ssl, int client_fd)
       for (;;)
       {
          wc_turn_reset(&turn);
+         message_history_repair(session->messages);
          messages_compact_consecutive(session->messages);
          int http_rc = wc_chat_send(session, &turn);
 

@@ -49,4 +49,12 @@ void agent_free_parsed_response(parsed_response_t *p);
 
 int messages_compact_consecutive(struct cJSON *messages);
 
+/* Repair inconsistent message history before sending to LLM.
+ * - Orphaned tool calls (no matching result) get synthetic cancellation results.
+ * - Orphaned tool results (no matching call) are removed.
+ * - Trailing unanswered tool calls are filled.
+ * Handles OpenAI (role=tool, tool_call_id) and Anthropic (tool_use/tool_result, tool_use_id).
+ * Returns the number of repairs performed. Idempotent. */
+int message_history_repair(struct cJSON *messages);
+
 #endif /* DEC_AGENT_PROTOCOL_H */
