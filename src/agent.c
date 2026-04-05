@@ -232,7 +232,8 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
          }
       }
 
-      /* Compact consecutive same-role messages before sending */
+      /* Repair inconsistent history (orphaned tool calls/results) then compact */
+      message_history_repair(messages);
       messages_compact_consecutive(messages);
 
       /* Build request (use fb_agent which may have fallback model after turn 0) */
@@ -754,9 +755,8 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
    if (has_tunnels && network && network->tunnel_mgr)
       agent_tunnel_stop_all(network->tunnel_mgr);
 
-   /* Log */
-   if (db)
-      agent_log_call(db, out, "");
+   /* Note: callers (agent_run, agent_run_with_tools) handle logging
+    * with the correct role. Do not log here to avoid double-logging. */
 
    /* Write Prometheus metrics */
    if (db)
@@ -896,6 +896,10 @@ int agent_run(sqlite3 *db, agent_config_t *cfg, const char *role, const char *sy
          {
             agent_log_call(db, out, role);
             agent_store_feedback(db, out, role, user_prompt);
+
+            agent_outcome_t oc;
+            classify_outcome(out, ag->max_turns, &oc);
+            record_outcome(db, out->agent_name, role, &oc);
          }
          agent_cache_put(db, role, user_prompt, out);
          return 0;
@@ -1009,6 +1013,11 @@ int agent_run_with_tools(sqlite3 *db, agent_config_t *cfg, const char *role,
       if (rc == 0)
          agent_log_call(db, out, role);
       agent_store_feedback(db, out, role, user_prompt);
+
+      /* Record structured outcome (was missing — delegates had no outcome tracking) */
+      agent_outcome_t oc;
+      classify_outcome(out, ag->max_turns, &oc);
+      record_outcome(db, out->agent_name, role, &oc);
    }
    if (rc == 0)
       agent_cache_put(db, role, user_prompt, out);

@@ -488,9 +488,8 @@ int agent_execute(sqlite3 *db, const agent_t *agent, const char *system_prompt,
    if (!out->success && !out->error[0])
       snprintf(out->error, sizeof(out->error), "no content in response");
 
-   /* Log to DB */
-   if (db)
-      agent_log_call(db, out, "");
+   /* Note: callers (agent_run, agent_run_with_tools) handle logging
+    * with the correct role. Do not log here to avoid double-logging. */
 
    return out->success ? 0 : -1;
 }

@@ -1198,6 +1198,7 @@ void cmd_chat(app_ctx_t *ctx, int argc, char **argv)
       for (;;)
       {
          chat_reset_turn(&state);
+         message_history_repair(state.messages);
          messages_compact_consecutive(state.messages);
 
          int http_rc = chat_send(&state);

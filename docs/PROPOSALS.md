@@ -11,7 +11,6 @@ This index reflects the current consolidated pending proposal set in [`docs/prop
 | [Agent Loop Middleware](proposals/pending/agent-loop-middleware.md) | Make per-turn behaviors composable instead of hardcoding them in the agent loop |
 | [Concurrent Tool Execution](proposals/pending/concurrent-tool-execution.md) | Execute independent tool calls from a single model response in parallel |
 | [Configurable Iteration Limits](proposals/pending/configurable-iteration-limits.md) | Cap per-message agent loops to prevent runaway spend |
-| [Message History Repair](proposals/pending/message-history-repair.md) | Repair inconsistent message histories before sending them back to a model |
 | [Incremental SSE Parser](proposals/pending/incremental-sse-parser.md) | Make streaming parsing robust to split frames and chunk boundaries |
 | [Thinking Block Support](proposals/pending/thinking-block-support.md) | Preserve and render reasoning/thinking blocks from newer model APIs |
 
@@ -135,6 +134,7 @@ This index reflects the current consolidated pending proposal set in [`docs/prop
 |----------|---------|
 | [Consecutive Message Compaction](proposals/done/consecutive-message-compaction.md) | Merge same-role adjacent messages before API calls |
 | [API Retry Backoff](proposals/complete/api-retry-backoff.md) | Add overflow-safe retries for transient provider/API failures |
+| [Message History Repair](proposals/done/message-history-repair.md) | Repair inconsistent message histories before sending them back to a model |
 
 ## Notes
 
