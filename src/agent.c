@@ -174,10 +174,19 @@ int agent_execute_with_tools(sqlite3 *db, const agent_t *agent, const agent_netw
    int total_calls = 0;
    int tok = (max_tokens > 0) ? max_tokens : agent->max_tokens;
    /* max_turns == 0 means unlimited (capped at 1000 as safety net);
-    * negative or unset falls back to the default. */
-   int max_t = (agent->max_turns > 0)    ? agent->max_turns
-               : (agent->max_turns == 0) ? 1000
-                                         : AGENT_DEFAULT_MAX_TURNS;
+    * negative or unset falls back to global config, then compile-time default. */
+   int max_t;
+   if (agent->max_turns > 0)
+      max_t = agent->max_turns;
+   else if (agent->max_turns == 0)
+      max_t = 1000;
+   else
+   {
+      config_t iter_cfg;
+      config_load(&iter_cfg);
+      max_t = iter_cfg.max_iterations_delegate > 0 ? iter_cfg.max_iterations_delegate
+                                                   : CONFIG_DEFAULT_MAX_ITERATIONS_DELEGATE;
+   }
 
    /* Stuck detection state */
    char last_tool_sig[256] = {0};

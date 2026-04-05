@@ -378,7 +378,7 @@ static void ag_add(app_ctx_t *ctx, sqlite3 *db, int argc, char **argv)
    snprintf(ag->provider, sizeof(ag->provider), "openai");
    ag->max_tokens = AGENT_DEFAULT_MAX_TOKENS;
    ag->timeout_ms = AGENT_DEFAULT_TIMEOUT_MS;
-   ag->max_turns = AGENT_DEFAULT_MAX_TURNS;
+   ag->max_turns = -1; /* inherit from global config max_iterations_delegate */
    ag->max_parallel = AGENT_DEFAULT_MAX_PARALLEL;
    ag->enabled = 1;
 

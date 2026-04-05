@@ -176,7 +176,7 @@ int agent_load_config(agent_config_t *cfg)
          ag->tools_enabled = (v && cJSON_IsBool(v)) ? cJSON_IsTrue(v) : 0;
 
          v = cJSON_GetObjectItem(a, "max_turns");
-         ag->max_turns = (v && cJSON_IsNumber(v)) ? v->valueint : AGENT_DEFAULT_MAX_TURNS;
+         ag->max_turns = (v && cJSON_IsNumber(v)) ? v->valueint : -1;
 
          v = cJSON_GetObjectItem(a, "max_parallel");
          ag->max_parallel = (v && cJSON_IsNumber(v)) ? v->valueint : AGENT_DEFAULT_MAX_PARALLEL;
