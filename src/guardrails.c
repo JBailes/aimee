@@ -581,6 +581,93 @@ static int bash_has_git_push(const char *cmd)
    return 0;
 }
 
+/* Extract the effective git directory from a bash command string.
+ * Handles "cd /path && git ..." and "git -C /path ..." patterns.
+ * Returns the target dir in out_dir if found, or copies fallback_cwd.
+ * out_dir is always NUL-terminated. */
+static void bash_git_target_dir(const char *cmd, const char *fallback_cwd, char *out_dir,
+                                size_t out_len)
+{
+   if (!cmd || !out_dir || out_len == 0)
+      return;
+
+   /* Pattern 1: "cd /path && ..." or "cd '/path' && ..." */
+   const char *p = cmd;
+   while (*p == ' ' || *p == '\t')
+      p++;
+   if (strncmp(p, "cd ", 3) == 0)
+   {
+      p += 3;
+      while (*p == ' ' || *p == '\t')
+         p++;
+      char quote = 0;
+      if (*p == '\'' || *p == '"')
+      {
+         quote = *p;
+         p++;
+      }
+      const char *start = p;
+      if (quote)
+      {
+         while (*p && *p != quote)
+            p++;
+      }
+      else
+      {
+         while (*p && *p != ' ' && *p != '\t' && *p != ';' && *p != '&')
+            p++;
+      }
+      size_t plen = (size_t)(p - start);
+      if (plen > 0 && plen < out_len)
+      {
+         memcpy(out_dir, start, plen);
+         out_dir[plen] = '\0';
+         return;
+      }
+   }
+
+   /* Pattern 2: "git -C /path ..." */
+   const char *gc = strstr(cmd, "git -C ");
+   if (!gc)
+      gc = strstr(cmd, "git -C\t");
+   if (gc)
+   {
+      const char *dp = gc + 7;
+      while (*dp == ' ' || *dp == '\t')
+         dp++;
+      char quote = 0;
+      if (*dp == '\'' || *dp == '"')
+      {
+         quote = *dp;
+         dp++;
+      }
+      const char *start = dp;
+      if (quote)
+      {
+         while (*dp && *dp != quote)
+            dp++;
+      }
+      else
+      {
+         while (*dp && *dp != ' ' && *dp != '\t')
+            dp++;
+      }
+      size_t dlen = (size_t)(dp - start);
+      if (dlen > 0 && dlen < out_len)
+      {
+         memcpy(out_dir, start, dlen);
+         out_dir[dlen] = '\0';
+         return;
+      }
+   }
+
+   /* Fallback: use the caller's cwd */
+   if (fallback_cwd)
+      snprintf(out_dir, out_len, "%s", fallback_cwd);
+   else
+      out_dir[0] = '\0';
+}
+
 int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
                    session_state_t *state, const char *guardrail_mode, const char *cwd,
                    char *msg_buf, size_t msg_len)
@@ -737,12 +824,24 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
       }
    }
 
-   /* Main branch protection: block all git write commands via Bash on main/master */
+   /* Main branch protection: block all git write commands via Bash on main/master.
+    * Extract the target directory from the command (cd /path && git ..., or
+    * git -C /path ...) so we check the correct repo's branch, not the hook's cwd. */
    if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
        bash_has_git_write(cmd->valuestring))
    {
+      char git_dir[MAX_PATH_LEN];
+      bash_git_target_dir(cmd->valuestring, cwd, git_dir, sizeof(git_dir));
+
+      char rev_cmd[MAX_PATH_LEN + 128];
+      if (git_dir[0])
+         snprintf(rev_cmd, sizeof(rev_cmd), "git -C '%s' rev-parse --abbrev-ref HEAD 2>/dev/null",
+                  git_dir);
+      else
+         snprintf(rev_cmd, sizeof(rev_cmd), "git rev-parse --abbrev-ref HEAD 2>/dev/null");
+
       int brc;
-      char *bbranch = run_cmd("git rev-parse --abbrev-ref HEAD 2>/dev/null", &brc);
+      char *bbranch = run_cmd(rev_cmd, &brc);
       if (brc == 0 && bbranch)
       {
          char *bnl = strchr(bbranch, '\n');
