@@ -27,6 +27,18 @@ int cli_connect(cli_conn_t *conn, const char *socket_path);
  * Returns NULL on error (timeout, disconnect, parse failure). */
 cJSON *cli_request(cli_conn_t *conn, cJSON *request, int timeout_ms);
 
+/* Callback for streaming events. Called for each intermediate JSON message
+ * that has an "event" field. Return 0 to continue, non-zero to abort. */
+typedef int (*cli_stream_cb)(cJSON *event, void *userdata);
+
+/* Send a JSON request and receive a streaming response.
+ * Intermediate messages (those with an "event" field) are passed to the
+ * callback. The final message (with a "status" field) is returned.
+ * Caller owns the returned cJSON object (must cJSON_Delete).
+ * Returns NULL on error. */
+cJSON *cli_request_stream(cli_conn_t *conn, cJSON *request, int timeout_ms, cli_stream_cb cb,
+                          void *userdata);
+
 /* Check if server is available (connect + server.info + disconnect).
  * Returns 1 if available, 0 if not. */
 int cli_server_available(const char *socket_path);

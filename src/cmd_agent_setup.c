@@ -9,12 +9,9 @@
 #include <time.h>
 #include <unistd.h>
 
-/* File-scope agent config, loaded once by cmd_agent before dispatch */
-static agent_config_t s_agent_cfg;
-
 /* --- agent subcommand handlers --- */
 
-/* File-scope agent config reference (defined in cmd_agent.c) */
+/* Agent config reference (defined in cmd_agent.c, loaded before dispatch) */
 extern agent_config_t s_agent_cfg;
 
 static void write_key_file(const char *path, const char *content)
@@ -1369,6 +1366,9 @@ void ag_token(app_ctx_t *ctx, sqlite3 *db, int argc, char **argv)
    cJSON_AddNumberToObject(updated, "expires_at", (double)(now + new_exp_secs));
    cJSON_AddStringToObject(updated, "client_id", client_id);
 
+   /* Print token before freeing the cJSON objects that own the string */
+   printf("%s", final_token);
+
    char *updated_str = cJSON_Print(updated);
    cJSON_Delete(updated);
    cJSON_Delete(exch);
@@ -1380,8 +1380,6 @@ void ag_token(app_ctx_t *ctx, sqlite3 *db, int argc, char **argv)
       write_key_file(auth_path, updated_str);
       free(updated_str);
    }
-
-   printf("%s", final_token);
 }
 
 /* --- tunnel status --- */
