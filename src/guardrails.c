@@ -508,6 +508,48 @@ static int check_classification(session_state_t *state, classification_t *cls, c
    return 0;
 }
 
+/* Check if a Bash command contains any git write invocation
+ * (commit, push, pull, reset, checkout, rebase, merge, stash, clean, tag,
+ *  add, restore, rm, mv, branch -d/-D). */
+static int bash_has_git_write(const char *cmd)
+{
+   if (!cmd)
+      return 0;
+
+   static const char *git_write_subcmds[] = {
+       "commit", "push", "pull", "reset",   "checkout", "rebase", "merge",  "stash",
+       "clean",  "tag",  "add",  "restore", "rm",       "mv",     "branch", NULL};
+
+   const char *p = cmd;
+   while ((p = strstr(p, "git")) != NULL)
+   {
+      /* Ensure "git" is at start or after a separator */
+      if (p != cmd)
+      {
+         char prev = *(p - 1);
+         if (prev != ' ' && prev != '\t' && prev != ';' && prev != '&' && prev != '|' &&
+             prev != '(' && prev != '\n')
+         {
+            p += 3;
+            continue;
+         }
+      }
+      const char *after = p + 3;
+      while (*after == ' ' || *after == '\t')
+         after++;
+      for (int i = 0; git_write_subcmds[i]; i++)
+      {
+         size_t slen = strlen(git_write_subcmds[i]);
+         if (strncmp(after, git_write_subcmds[i], slen) == 0 &&
+             (after[slen] == '\0' || after[slen] == ' ' || after[slen] == '\t' ||
+              after[slen] == ';'))
+            return 1;
+      }
+      p = after;
+   }
+   return 0;
+}
+
 /* Check if a Bash command contains a git push invocation. */
 static int bash_has_git_push(const char *cmd)
 {
@@ -693,6 +735,30 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
             return 2;
          }
       }
+   }
+
+   /* Main branch protection: block all git write commands via Bash on main/master */
+   if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
+       bash_has_git_write(cmd->valuestring))
+   {
+      int brc;
+      char *bbranch = run_cmd("git rev-parse --abbrev-ref HEAD 2>/dev/null", &brc);
+      if (brc == 0 && bbranch)
+      {
+         char *bnl = strchr(bbranch, '\n');
+         if (bnl)
+            *bnl = '\0';
+         if (strcmp(bbranch, "main") == 0 || strcmp(bbranch, "master") == 0)
+         {
+            free(bbranch);
+            snprintf(msg_buf, msg_len,
+                     "BLOCKED: git write command on main branch is not allowed. "
+                     "Create a feature branch first.");
+            cJSON_Delete(root);
+            return 2;
+         }
+      }
+      free(bbranch);
    }
 
    /* Merged-PR enforcement for Bash git push commands */
