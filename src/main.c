@@ -282,7 +282,7 @@ int main(int argc, char **argv)
          /* Create all pending worktrees */
          const char *sid = session_id();
          for (int i = 0; i < state.worktree_count; i++)
-            worktree_create_sibling(state.worktrees[i].git_root, sid);
+            worktree_create_sibling(state.worktrees[i].git_root, sid, NULL);
 
          /* chdir to the worktree equivalent of cwd */
          if (state.worktree_count > 0)

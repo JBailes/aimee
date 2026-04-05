@@ -1,8 +1,9 @@
 /* worktree.c: simplified worktree lifecycle — sibling worktree creation and cleanup.
  *
- * New model: one worktree per git repo per session, created as a hidden
- * sibling directory next to the project root, named .aimee-<project>-<short-session-id>.
- * No DB registry, no GC system, no complex state tracking. */
+ * Session worktrees: .aimee-<project>-<short-session-id>
+ * Delegate worktrees: .aimee-<project>-<short-session-id>-<work-name>
+ * The optional work_name parameter prevents collisions when multiple
+ * delegates run in the same session. */
 #define _GNU_SOURCE
 #include "aimee.h"
 #include "cJSON.h"
@@ -12,8 +13,12 @@
 
 /* Compute the expected sibling worktree path for a git repo and session.
  * For git_root="/root/dev/aimee" and session "abc123...", produces
- * "/root/dev/.aimee-aimee-abc12345". */
-int worktree_sibling_path(const char *git_root, const char *sid, char *wt_buf, size_t wt_len)
+ * "/root/dev/.aimee-aimee-abc12345".
+ * If work_name is non-NULL (e.g. "task01"), produces
+ * "/root/dev/.aimee-aimee-abc12345-task01" to avoid collisions
+ * when multiple delegates run in the same session. */
+int worktree_sibling_path(const char *git_root, const char *sid, const char *work_name,
+                          char *wt_buf, size_t wt_len)
 {
    if (!git_root || !sid || !wt_buf)
       return -1;
@@ -23,7 +28,7 @@ int worktree_sibling_path(const char *git_root, const char *sid, char *wt_buf, s
    snprintf(short_id, sizeof(short_id), "%.8s", sid);
 
    /* Split git_root into parent dir and basename, then produce
-    * <parent>/.aimee-<basename>-<short_id> */
+    * <parent>/.aimee-<basename>-<short_id>[-<work_name>] */
    char parent[MAX_PATH_LEN];
    snprintf(parent, sizeof(parent), "%s", git_root);
 
@@ -38,7 +43,10 @@ int worktree_sibling_path(const char *git_root, const char *sid, char *wt_buf, s
    if (last_slash == parent)
       basename = parent + 1;
 
-   snprintf(wt_buf, wt_len, "%s/.aimee-%s-%s", parent, basename, short_id);
+   if (work_name && work_name[0])
+      snprintf(wt_buf, wt_len, "%s/.aimee-%s-%s-%s", parent, basename, short_id, work_name);
+   else
+      snprintf(wt_buf, wt_len, "%s/.aimee-%s-%s", parent, basename, short_id);
    return 0;
 }
 
@@ -48,14 +56,15 @@ int is_aimee_worktree_path(const char *path)
    return path && strstr(path, "/.aimee-") != NULL;
 }
 
-/* Create a sibling worktree. Returns 0 on success, -1 on failure. */
-int worktree_create_sibling(const char *git_root, const char *sid)
+/* Create a sibling worktree. Returns 0 on success, -1 on failure.
+ * If work_name is non-NULL, creates a separate worktree for that work unit. */
+int worktree_create_sibling(const char *git_root, const char *sid, const char *work_name)
 {
    if (!git_root || !sid)
       return -1;
 
    char wt_path[MAX_PATH_LEN];
-   if (worktree_sibling_path(git_root, sid, wt_path, sizeof(wt_path)) != 0)
+   if (worktree_sibling_path(git_root, sid, work_name, wt_path, sizeof(wt_path)) != 0)
       return -1;
 
    /* Check if worktree already exists and is valid */
@@ -94,11 +103,14 @@ int worktree_create_sibling(const char *git_root, const char *sid)
       }
    }
 
-   /* Create branch name from session ID */
+   /* Create branch name from session ID (and optional work name) */
    char short_id[12];
    snprintf(short_id, sizeof(short_id), "%.8s", sid);
-   char branch_name[64];
-   snprintf(branch_name, sizeof(branch_name), "aimee/session/%s", short_id);
+   char branch_name[128];
+   if (work_name && work_name[0])
+      snprintf(branch_name, sizeof(branch_name), "aimee/session/%s/%s", short_id, work_name);
+   else
+      snprintf(branch_name, sizeof(branch_name), "aimee/session/%s", short_id);
 
    /* Create the worktree */
    char cmd[MAX_PATH_LEN * 2 + 256];
@@ -119,14 +131,15 @@ int worktree_create_sibling(const char *git_root, const char *sid)
    return -1;
 }
 
-/* Clean up a session's worktree. Removes if clean, warns if dirty. */
-void worktree_cleanup(const char *git_root, const char *sid)
+/* Clean up a session's worktree. Removes if clean, warns if dirty.
+ * If work_name is non-NULL, targets the work-specific worktree. */
+void worktree_cleanup(const char *git_root, const char *sid, const char *work_name)
 {
    if (!git_root || !sid)
       return;
 
    char wt_path[MAX_PATH_LEN];
-   if (worktree_sibling_path(git_root, sid, wt_path, sizeof(wt_path)) != 0)
+   if (worktree_sibling_path(git_root, sid, work_name, wt_path, sizeof(wt_path)) != 0)
       return;
 
    struct stat st;
