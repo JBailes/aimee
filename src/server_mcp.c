@@ -309,8 +309,14 @@ static cJSON *dispatch_git_tool(const char *tool, cJSON *args, const char *sid, 
    int did_chdir = mcp_chdir_git_root(git_old_cwd, sizeof(git_old_cwd), args);
 
    /* If we're in a workspace that has a sibling worktree, chdir to it.
-    * Uses the worktree mappings stored in session state. */
-   if (sid && sid[0])
+    * Uses the worktree mappings stored in session state.
+    *
+    * Skip worktree redirect for operations that must run in the actual
+    * project root: git_verify (runs build/test/lint commands relative to
+    * the project), and git_branch (manages branches in the main checkout). */
+   int skip_worktree = (strcmp(tool, "git_verify") == 0 || strcmp(tool, "git_branch") == 0);
+
+   if (sid && sid[0] && !skip_worktree)
    {
       char state_path[MAX_PATH_LEN];
       session_state_path(state_path, sizeof(state_path));
