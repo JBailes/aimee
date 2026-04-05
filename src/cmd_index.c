@@ -134,8 +134,8 @@ static int discover_projects(const char *base_dir, scan_entry_t *entries, int *c
 /* Scan a batch of projects in a forked child process.
  * Each child gets its own sqlite connection (fork isolation).
  * Results are written back through a pipe as "index:scanned\n" lines. */
-static pid_t scan_batch_fork(scan_entry_t *entries, int start, int end, int force,
-                             int verbose, int result_fd)
+static pid_t scan_batch_fork(scan_entry_t *entries, int start, int end, int force, int verbose,
+                             int result_fd)
 {
    pid_t pid = fork();
    if (pid != 0)
