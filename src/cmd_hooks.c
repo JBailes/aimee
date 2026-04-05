@@ -137,13 +137,17 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
       }
 
       /* Worktree path rewrite: emit hookSpecificOutput with updatedInput so
-       * Claude Code silently re-targets the tool call at the worktree path. */
-      if (rc == 1 && msg[0])
+       * Claude Code silently re-targets the tool call at the worktree path.
+       * rc==1: edit tool file_path rewrite, rc==3: bash command rewrite. */
+      if ((rc == 1 || rc == 3) && msg[0])
       {
          cJSON *orig = cJSON_Parse(tool_input);
          if (orig)
          {
-            cJSON_ReplaceItemInObject(orig, "file_path", cJSON_CreateString(msg));
+            if (rc == 1)
+               cJSON_ReplaceItemInObject(orig, "file_path", cJSON_CreateString(msg));
+            else
+               cJSON_ReplaceItemInObject(orig, "command", cJSON_CreateString(msg));
 
             cJSON *output = cJSON_CreateObject();
             cJSON *hook_out = cJSON_AddObjectToObject(output, "hookSpecificOutput");

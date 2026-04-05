@@ -675,7 +675,17 @@ int pre_tool_check(sqlite3 *db, const char *tool_name, const char *input_json,
                return 1; /* allow with path rewrite */
             }
 
-            /* For bash write commands, still block (can't reliably rewrite shell paths) */
+            /* For bash write commands, silently rewrite by prepending cd to worktree */
+            if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd))
+            {
+               fprintf(stderr, "aimee: worktree rewrite (bash): cd %s && %s\n", wt_path,
+                       cmd->valuestring);
+               snprintf(msg_buf, msg_len, "cd %s && %s", wt_path, cmd->valuestring);
+               cJSON_Delete(root);
+               return 3; /* allow with command rewrite */
+            }
+
+            /* Fallback: block if we can't determine how to rewrite */
             fprintf(stderr, "aimee: worktree redirect: %s -> %s\n", target, wt_path);
             snprintf(msg_buf, msg_len, "BLOCKED: write to real repo path. Use worktree instead: %s",
                      wt_path);
