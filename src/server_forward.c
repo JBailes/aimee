@@ -13,7 +13,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 /* Compute context (same as server_compute.c) */
 typedef struct
 {
